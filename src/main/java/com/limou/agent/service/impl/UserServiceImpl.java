@@ -321,9 +321,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         }
         User user = this.getById(userId);
         if (user == null) throw new BusinessException(ErrorCode.NOT_FOUND_ERROR);
-        if (!encryptPassword("12345678").equals(user.getUserPassword())) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "密码已设置过，请使用修改密码功能");
-        }
         user.setUserPassword(encryptPassword(newPassword));
         updateById(user);
     }
