@@ -61,6 +61,8 @@ public class IntentClassifyNode implements GraphNode<MovieGraphState> {
         if (intentResult.getSlots() != null) {
             convState = stateManager.mergeState(state.getConversationId(), intentResult.getSlots());
         }
+        // mergeState 内部重新从 Redis 加载会覆盖掉之前设的 userId，必须在 merge 之后补设
+        convState.setUserId(state.getUserId());
 
         // ★ 查询类意图（用户重新看影院/场次/影片）→ 作废上一单残留的订单/座位，避免误锁座/误下单
         //   （如上一单下单后 state 残留 seatIds/orderId，用户又说"去XX影院"时会被误当成锁座下单）

@@ -10,8 +10,11 @@ import cn.hutool.json.JSONUtil;
 import com.limou.agent.ai.AiCodeGeneratorFactory;
 import com.limou.agent.ai.movie.tools.LockSeatsTool;
 import com.limou.agent.ai.movie.tools.PayOrderTool;
+import com.limou.agent.model.entity.User;
 import com.limou.agent.service.AiService;
+import com.limou.agent.service.UserService;
 import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
@@ -42,6 +45,8 @@ public class MovieAgentController {
     @Resource
     private PayOrderTool payOrderTool;
 
+    @Resource
+    private UserService userService;
 
 
     /**
@@ -52,10 +57,11 @@ public class MovieAgentController {
     public Flux<ServerSentEvent<String>> doSmartStream(
             @RequestParam String message,
             @RequestParam String conversationId,
-            @RequestParam(required = false) Long userId,
             @RequestParam(required = false) String city,
             @RequestParam(required = false) Double lat,
-            @RequestParam(required = false) Double lng) {
+            @RequestParam(required = false) Double lng,
+            HttpServletRequest request) {
+        Long userId = userService.getLoginUser(request).getId();
         return aiService.doMovieSmartChatStream(message, conversationId, userId, city, lat, lng);
     }
 
@@ -79,11 +85,12 @@ public class MovieAgentController {
      * scheduleId/orderId 均为可选：卡片选场次时只传 scheduleId，下单后额外传 orderId+seatLabels。
      */
     @PostMapping("/sync-state")
-    public String syncState(@RequestParam Long userId,
-                            @RequestParam(required = false) Long scheduleId,
+    public String syncState(@RequestParam(required = false) Long scheduleId,
                             @RequestParam(required = false) Long orderId,
                             @RequestParam(required = false) String seatLabels,
-                            @RequestParam(required = false) String conversationId) {
+                            @RequestParam(required = false) String conversationId,
+                            HttpServletRequest request) {
+        Long userId = userService.getLoginUser(request).getId();
         if (conversationId == null || conversationId.isBlank()) {
             conversationId = movieStateManager.findCurrentConversationId(userId);
         }

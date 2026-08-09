@@ -226,6 +226,7 @@ public class MovieStateManager {
             state.setSeatIds(null);
             state.setSeatLabels(null);
             state.setOrderId(null);
+            log.info("用户换了电影，清理之前的逻辑");
         }
 
         // 清理旧场次后恢复用户本轮明确指定的日期，供场次查询使用。

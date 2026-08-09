@@ -55,14 +55,14 @@ public class GraphIntentClassifier {
             用户可能输入错别字或音近词（如"支柱下"实指"蜘蛛侠"、"巨目"实指"巨幕"、"耀莱"实指"耀莱成龙国际影城"）。
             **仍然按用户原词提取到对应槽位**（filmName/cinemaName/hallType），不要因为名字怪异就漏提或归为 unknown。纠错由搜索工具自动完成。
             - location: 地理位置描述（仅 search_nearby 意图填写）。提取用户想去的地点/地标/机构名，如"河南科技大学"、"万达广场"、"北京西站"。用户只说"附近"且无具体地点时填 null（工具会用城市名定位）
-            - hallType: 厅型（IMAX/杜比/VIP 等）
+            - hallType: 厅型（IMAX/杜比/VIP/巨幕/4DX/普通 等）。**注意："第X排""前排""后排""中间""靠边"等描述座位位置的词绝不是 hallType，不要填到这里！**
             - showDate: 日期 yyyy-MM-dd
             - startTime: 时间 HH:mm
             - ticketCount: 票数（整数）
-            - seatLabels: 座位标签数组，如 ["5排6座"]
+            - seatLabels: 座位标签数组，如 ["5排6座"]。用户指定具体座位时填写（"第X排第Y个/座""X排Y座"→["X排Y座"]）
             - scheduleId: 场次ID（整数）
             - orderId: 订单ID（整数）
-            - preferredSeatZone: 偏好座位区域（中间/靠前/靠后/全场）
+            - preferredSeatZone: 偏好座位区域（中间/靠前/靠后/第一排/最后一排/靠边/全场）。用户只说区域不说具体座位号时填这里
 
             ## 选择动作与时段识别（重要）
             - 用户说"选X厅/选X影院/选第几个/就选这个/那个/确认/可以"等选择或确认动作时，务必提取 hallType/hallName/cinemaName，意图识别为 get_seat_map 或 lock_seats
@@ -173,6 +173,10 @@ public class GraphIntentClassifier {
                 }
                 if (slotsMap.get("preferredSeatZone") != null)
                     slots.setPreferredSeatZone((String) slotsMap.get("preferredSeatZone"));
+            }
+            // userId 从当前会话状态获取，不由 LLM 提取（安全：防止用户伪造）
+            if (currentState != null && currentState.getUserId() != null) {
+                slots.setUserId(currentState.getUserId());
             }
             log.info("Graph Intent: intent={}, slots={}, cacheKey={}", intent, slots, cacheKey);
             GraphIntentResult intentResult = GraphIntentResult.builder()
