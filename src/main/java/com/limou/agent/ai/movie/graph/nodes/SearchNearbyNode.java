@@ -64,14 +64,15 @@ public class SearchNearbyNode implements GraphNode<MovieGraphState> {
     }
 
     /**
-     * 将匹配到的影院写回会话状态
+     * 将匹配到的影院写回会话状态。
+     * 优先级：同名匹配 → 唯一结果自动选 → 用户要求"最近"且未指定影院名时自动选最近的（有排片优先）
      */
     private void persistResolvedCinema(String result, ConversationState convState, String conversationId) {
         try {
             JSONArray cinemas = JSONUtil.parseObj(result).getJSONArray("cinemas");
             if (cinemas == null || cinemas.isEmpty()) return;
 
-            // 优先匹配同名，否则只有一个结果时自动选定
+            // 优先匹配同名
             JSONObject selected = null;
             for (int i = 0; i < cinemas.size(); i++) {
                 JSONObject cinema = cinemas.getJSONObject(i);
@@ -81,7 +82,24 @@ public class SearchNearbyNode implements GraphNode<MovieGraphState> {
                     break;
                 }
             }
+            // 唯一结果 → 自动选定
             if (selected == null && cinemas.size() == 1) selected = cinemas.getJSONObject(0);
+
+            // ★ 用户没指定影院名时，自动选最近的（有排片优先，无排片则选最近的）
+            if (selected == null) {
+                JSONObject best = null;
+                for (int i = 0; i < cinemas.size(); i++) {
+                    JSONObject c = cinemas.getJSONObject(i);
+                    if (c.getLong("cinemaId") == null) continue;
+                    if (Boolean.TRUE.equals(c.getBool("hasSchedule"))) {
+                        best = c;
+                        break; // 按距离排序的，第一个有排片的就是最近的
+                    }
+                    if (best == null) best = c; // 兜底：取第一个有 cinemaId 的
+                }
+                selected = best;
+            }
+
             if (selected == null || selected.getLong("cinemaId") == null) return;
 
             convState.setCinemaId(selected.getLong("cinemaId"));

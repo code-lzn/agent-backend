@@ -73,6 +73,18 @@ public class LockSeatsNode implements GraphNode<MovieGraphState> {
 
         List<Long> seatIds = convState.getSeatIds();
 
+        // ★ 用户指定了具体座位标签（如 "1排1座"），从座位图查找对应的 seatId
+        if ((seatIds == null || seatIds.isEmpty())
+                && convState.getSeatLabels() != null && !convState.getSeatLabels().isEmpty()) {
+            String seatMapJson = getSeatMapTool.getSeatMap(convState.getScheduleId());
+            seatIds = resolveSeatLabels(seatMapJson, convState.getSeatLabels());
+            if (!seatIds.isEmpty()) {
+                convState.setSeatIds(seatIds);
+                log.info("LockSeats seatLabels→seatId: labels={}, ids={}",
+                        convState.getSeatLabels(), seatIds);
+            }
+        }
+
         // ★ 自动选座：用户明确让 AI 选座（有选座偏好 或 消息里委托"帮我选/直接下单/就按你推荐的"）但未指定具体座位。
         //   只报票数（"两位"）没有偏好/委托 → 不自动选座（此时 resolveIntent 已降级 get_seat_map，这里兜底防御），返回"请先选择座位"
         if ((seatIds == null || seatIds.isEmpty())
@@ -228,6 +240,14 @@ public class LockSeatsNode implements GraphNode<MovieGraphState> {
             int startRow;
             int endRow;
             switch (z) {
+                case "第一排" -> {
+                    startRow = 0;
+                    endRow = 1; // 只取第 1 排
+                }
+                case "最后一排" -> {
+                    startRow = rowCount - 1;
+                    endRow = rowCount; // 只取最后 1 排
+                }
                 case "靠前" -> {
                     startRow = 0;
                     endRow = Math.max(1, (int) Math.ceil(rowCount * 0.3));
@@ -386,6 +406,34 @@ public class LockSeatsNode implements GraphNode<MovieGraphState> {
             }
         }
         return new CenterBlock(best, bestDist);
+    }
+
+    /**
+     * 根据座位标签（如 "1排1座"）从座位图中查找对应的 seatId。
+     */
+    private List<Long> resolveSeatLabels(String seatMapJson, List<String> seatLabels) {
+        List<Long> ids = new ArrayList<>();
+        try {
+            JSONObject map = JSONUtil.parseObj(seatMapJson);
+            JSONArray grid = map.getJSONArray("seatGrid");
+            if (grid == null || grid.isEmpty()) return ids;
+
+            java.util.Set<String> targetLabels = new java.util.HashSet<>(seatLabels);
+            for (int r = 0; r < grid.size(); r++) {
+                JSONArray row = grid.getJSONArray(r);
+                if (row == null) continue;
+                for (int c = 0; c < row.size(); c++) {
+                    JSONObject seat = row.getJSONObject(c);
+                    if (seat != null && targetLabels.contains(seat.getStr("seatLabel"))) {
+                        Long sid = seat.getLong("seatId");
+                        if (sid != null) ids.add(sid);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("resolveSeatLabels 失败: labels={}", seatLabels, e);
+        }
+        return ids;
     }
 
     private boolean has(String s) {

@@ -307,6 +307,13 @@ public class SearchNearbyCinemasTool extends BaseTool {
             result.add(map);
         }
 
+        // ★ 有 filmId 时只展示有排片的影院，避免卡片与 LLM 回复矛盾
+        if (filmId != null) {
+            result = result.stream()
+                    .filter(m -> Boolean.TRUE.equals(m.get("hasSchedule")))
+                    .collect(Collectors.toList());
+        }
+
         // ★ 按距离从近到远排序
         result.sort(Comparator.comparingInt(m ->
                 ((Number) m.getOrDefault("distanceMeters", Integer.MAX_VALUE)).intValue()));

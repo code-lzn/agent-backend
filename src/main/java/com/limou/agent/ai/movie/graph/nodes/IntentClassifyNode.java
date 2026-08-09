@@ -138,12 +138,9 @@ public class IntentClassifyNode implements GraphNode<MovieGraphState> {
                 yield intent;
             }
             // ──────── 层级5: 锁座 ────────
+            // LockSeatsNode 内置 resolveScheduleId()，有 filmId 即可自动解析场次，无需重定向
             case "lock_seats" -> {
-                // 缺场次 → 退回查场次或搜影片
-                if (state.getScheduleId() == null) {
-                    if (state.getFilmId() != null) {
-                        yield "search_schedule";
-                    }
+                if (state.getScheduleId() == null && state.getFilmId() == null) {
                     if (has(state.getFilmName())) {
                         yield "search_movie";
                     }
@@ -157,20 +154,16 @@ public class IntentClassifyNode implements GraphNode<MovieGraphState> {
                 yield intent;
             }
             // ──────── 层级6: 下单 ────────
+            // CreateOrderNode 依赖 LockSeatsNode 串联，缺 scheduleId/seatIds 时升级到 lock_seats
             case "create_order" -> {
-                // 缺场次 → 退回查场次或搜影片
-                if (state.getScheduleId() == null) {
-                    if (state.getFilmId() != null) {
-                        yield "search_schedule";
-                    }
+                if (state.getScheduleId() == null && state.getFilmId() == null) {
                     if (has(state.getFilmName())) {
                         yield "search_movie";
                     }
                     yield "chat";
                 }
-                // 缺座位 → 自动选座 或 展示座位图让用户选
                 if (state.getSeatIds() == null || state.getSeatIds().isEmpty()) {
-                    yield state.canAutoPickSeats(userMessage) ? "lock_seats" : "get_seat_map";
+                    yield "lock_seats"; // LockSeatsNode 自动解析场次 + 锁座
                 }
                 yield intent;
             }
