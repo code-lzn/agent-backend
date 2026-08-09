@@ -15,6 +15,7 @@ import com.limou.agent.service.OrderService;
 import com.limou.agent.service.ScheduleService;
 import com.limou.agent.service.TicketService;
 import com.limou.agent.service.UserWatchedFilmService;
+import com.limou.agent.util.ScheduleTimeUtil;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
 import lombok.extern.slf4j.Slf4j;
@@ -24,7 +25,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -260,23 +260,14 @@ public class TicketServiceImpl extends ServiceImpl<TicketMapper, Ticket> impleme
     }
 
     /**
-     * 票是否已过期：未核销且场次已结束。
+     * 票是否已过期：未核销且场次已结束（跨天场次由 ScheduleTimeUtil 正确处理）。
      */
     private boolean isExpired(Ticket ticket) {
         if (ticket.getStatus() != null && TicketStatusEnum.UNUSED != TicketStatusEnum.getEnumByValue(ticket.getStatus())) {
             return false;
         }
         Schedule schedule = scheduleService.getById(ticket.getScheduleId());
-        if (schedule == null || schedule.getShowDate() == null || schedule.getEndTime() == null) {
-            return false;
-        }
-        try {
-            LocalDateTime endTime = LocalDateTime.of(schedule.getShowDate().toLocalDate(),
-                    LocalTime.parse(schedule.getEndTime()));
-            return LocalDateTime.now().isAfter(endTime);
-        } catch (Exception e) {
-            return false;
-        }
+        return ScheduleTimeUtil.isEnded(schedule);
     }
 
     /**

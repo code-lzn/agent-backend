@@ -4,6 +4,7 @@ import com.limou.agent.mapper.ScheduleMapper;
 import com.limou.agent.mapper.SeatMapper;
 import com.limou.agent.model.entity.Schedule;
 import com.limou.agent.model.entity.Seat;
+import com.limou.agent.util.ScheduleTimeUtil;
 import com.mybatisflex.core.query.QueryWrapper;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -13,7 +14,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Date;
 import java.time.LocalDate;
-import java.time.LocalTime;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -48,7 +48,6 @@ public class ExpiredScheduleSeatCleanupTask {
         try {
             // 1. 查询所有已过时的场次（今天之前 + 今天但已散场）
             LocalDate today = LocalDate.now();
-            LocalTime now = LocalTime.now();
 
             // 1a. 今天之前的场次（必定已散场）
             List<Schedule> pastSchedules = scheduleMapper.selectListByQuery(
@@ -62,16 +61,9 @@ public class ExpiredScheduleSeatCleanupTask {
                             .eq(Schedule::getShowDate, Date.valueOf(today))
                             .in(Schedule::getStatus, "published", "soldOut", "offline"));
 
-            // 过滤：endTime < now 才算已散场
+            // 过滤：今天已散场的才清理（跨天场次今天开场、次日散场，由 isEnded 正确处理）
             todayEnded = todayEnded.stream()
-                    .filter(s -> {
-                        try {
-                            return s.getEndTime() != null
-                                    && LocalTime.parse(s.getEndTime()).isBefore(now);
-                        } catch (Exception e) {
-                            return false;
-                        }
-                    })
+                    .filter(ScheduleTimeUtil::isEnded)
                     .collect(Collectors.toList());
 
             List<Schedule> expired = new java.util.ArrayList<>(pastSchedules);

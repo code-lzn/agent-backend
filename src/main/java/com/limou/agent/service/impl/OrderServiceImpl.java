@@ -24,6 +24,7 @@ import com.mybatisflex.spring.service.impl.ServiceImpl;
 import com.limou.agent.mq.OrderStatusNotifier;
 import com.limou.agent.mq.OrderTimeoutConfig;
 import com.limou.agent.mq.OrderTimeoutMessage;
+import com.limou.agent.util.ScheduleTimeUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -531,19 +532,14 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "已核销，无法退票");
         }
 
-        // 已过期拦截：状态为 expired 或放映已结束
+        // 已过期拦截：状态为 expired 或放映已结束（跨天场次由 ScheduleTimeUtil 正确处理）
         if ("expired".equals(order.getStatus())) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "订单已过期，无法退票");
         }
         try {
             Schedule schedule = scheduleService.getById(order.getScheduleId());
-            if (schedule != null && schedule.getEndTime() != null && schedule.getShowDate() != null) {
-                LocalDateTime endTime = LocalDateTime.of(
-                    schedule.getShowDate().toLocalDate(),
-                    java.time.LocalTime.parse(schedule.getEndTime()));
-                if (LocalDateTime.now().isAfter(endTime)) {
-                    throw new BusinessException(ErrorCode.OPERATION_ERROR, "订单已过期，无法退票");
-                }
+            if (ScheduleTimeUtil.isEnded(schedule)) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "订单已过期，无法退票");
             }
         } catch (BusinessException e) {
             throw e;

@@ -169,6 +169,8 @@ public class ScheduleController {
      */
     @PutMapping("update")
     public BaseResponse<Boolean> update(@RequestBody Schedule schedule) {
+        // 编辑同样禁止跨天场次：开场 + 片长 + 15 分钟散场超过午夜则拒绝
+        scheduleService.validateEndTimeWithinDay(schedule);
         boolean result = scheduleService.updateById(schedule);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
         return ResultUtils.success(true);

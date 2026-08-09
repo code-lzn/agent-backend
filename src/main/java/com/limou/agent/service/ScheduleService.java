@@ -46,4 +46,12 @@ public interface ScheduleService extends IService<Schedule> {
      * @return 成功创建的排期数量
      */
     int batchSaveWithSeats(List<Schedule> scheduleList);
+
+    /**
+     * 校验排期散场时间不超过午夜（开场 + 片长 + 15 分钟散场，跨天则抛异常）。
+     * 新增/批量/编辑共用，从源头禁止跨天场次。
+     *
+     * @param schedule 排期信息（需含 filmId、startTime）
+     */
+    void validateEndTimeWithinDay(Schedule schedule);
 }

@@ -193,10 +193,11 @@ public class ScheduleServiceImpl extends ServiceImpl<ScheduleMapper, Schedule> i
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Long saveScheduleWithSeats(Schedule schedule) {
-        // 0. 校验日期不能为过去 + 影院营业状态 + 影片可上映状态
+        // 0. 校验日期不能为过去 + 影院营业状态 + 影片可上映状态 + 散场时间不超过午夜
         checkShowDateNotPast(schedule.getShowDate());
         checkCinemaOperable(schedule.getCinemaId());
         checkFilmPublishable(schedule.getFilmId());
+        checkEndTimeWithinDay(schedule, null);
 
         // 1. 保存排期
         boolean saved = super.save(schedule);
@@ -223,9 +224,10 @@ public class ScheduleServiceImpl extends ServiceImpl<ScheduleMapper, Schedule> i
             return 0;
         }
 
-        // 0. 校验影院营业状态（去重检查）+ 日期不能为过去 + 影片可上映状态，先于保存，快速失败
+        // 0. 校验影院营业状态（去重检查）+ 日期不能为过去 + 影片可上映状态 + 散场时间不超过午夜，先于保存，快速失败
         Set<Long> checkedCinemas = new HashSet<>();
         Set<Long> checkedFilms = new HashSet<>();
+        Map<Long, Film> filmCache = new HashMap<>();
         for (Schedule s : scheduleList) {
             if (checkedCinemas.add(s.getCinemaId())) {
                 checkCinemaOperable(s.getCinemaId());
@@ -234,6 +236,7 @@ public class ScheduleServiceImpl extends ServiceImpl<ScheduleMapper, Schedule> i
             if (checkedFilms.add(s.getFilmId())) {
                 checkFilmPublishable(s.getFilmId());
             }
+            checkEndTimeWithinDay(s, filmCache);
         }
 
         // 1. 批量保存所有场次，拿到自增 ID（单事务 + 单批 SQL，避免逐条 INSERT 的网络往返）
@@ -320,6 +323,42 @@ public class ScheduleServiceImpl extends ServiceImpl<ScheduleMapper, Schedule> i
     private void checkShowDateNotPast(Date showDate) {
         if (showDate != null && showDate.before(Date.valueOf(LocalDate.now()))) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "不能新增过去的场次");
+        }
+    }
+
+    @Override
+    public void validateEndTimeWithinDay(Schedule schedule) {
+        checkEndTimeWithinDay(schedule, null);
+    }
+
+    /**
+     * 校验散场时间不超过午夜：开场时间 + 影片时长 + 15 分钟散场，若跨过 24:00 则拒绝新增。
+     * 从源头禁止跨天场次（避免跨天场次的票过期/座位清理误判）。
+     */
+    private void checkEndTimeWithinDay(Schedule schedule, Map<Long, Film> filmCache) {
+        if (schedule == null || schedule.getFilmId() == null || schedule.getStartTime() == null) {
+            return;
+        }
+        Film film = filmCache != null ? filmCache.get(schedule.getFilmId())
+                : filmService.getById(schedule.getFilmId());
+        if (film == null || film.getDuration() == null) {
+            return; // 无片长信息时跳过（由影片可上映校验兜底）
+        }
+        LocalTime start;
+        try {
+            start = LocalTime.parse(schedule.getStartTime());
+        } catch (Exception e) {
+            return; // 时间格式异常由其他校验兜底
+        }
+        // 开场 + 片长 + 15 分钟散场，超过 24:00 即跨天
+        LocalTime end = start.plusMinutes(film.getDuration() + 15L);
+        if (end.isBefore(start)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR,
+                    "散场时间超过午夜，不允许添加跨天场次（开场 " + schedule.getStartTime()
+                            + " + 片长 " + film.getDuration() + " 分钟 + 15 分钟散场）");
+        }
+        if (filmCache != null) {
+            filmCache.putIfAbsent(schedule.getFilmId(), film);
         }
     }
 

@@ -65,11 +65,12 @@ public class TicketExpireTask implements ApplicationRunner {
         LocalDate today = LocalDate.now();
         String nowTime = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"));
 
-        // 1. 已结束场次：日期早于今天，或（今天 且 散场时间 <= 当前时间）
+        // 1. 已结束场次：日期早于今天，或（今天 且 非跨天 且 散场时间 <= 当前时间）
+        //    跨天场次（startTime >= endTime，如 23:00 开场次日散场）今天不算结束，次日由 showDate < today 覆盖
         List<Schedule> endedSchedules = scheduleService.list(
                 QueryWrapper.create()
                         .le("showDate", Date.valueOf(today))
-                        .and("(showDate < ? OR (showDate = ? AND endTime <= ?))",
+                        .and("(showDate < ? OR (showDate = ? AND startTime < endTime AND endTime <= ?))",
                                 Date.valueOf(today), Date.valueOf(today), nowTime));
         if (endedSchedules.isEmpty()) {
             return;
