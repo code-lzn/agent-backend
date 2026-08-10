@@ -37,26 +37,6 @@ public class AlipayController {
     @Autowired
     private AlipayConfig alipayConfig;
 
-    /**
-     * 从 YAML 配置 alipay.return_url 中提取前端 base URL，无硬编码。
-     * 例：return_url = http://192.168.13.1:8000/home → 返回 http://192.168.13.1:8000
-     */
-    private String frontendBaseUrl() {
-        String returnUrl = alipayConfig.getReturnUrl();
-        int schemeEnd = returnUrl.indexOf("://");
-        if (schemeEnd < 0) return returnUrl;
-        String afterScheme = returnUrl.substring(schemeEnd + 3);
-        int pathStart = afterScheme.indexOf('/');
-        return pathStart > 0
-                ? returnUrl.substring(0, schemeEnd + 3 + pathStart)
-                : returnUrl;
-    }
-
-    /**
-     * 浏览器直接打开即可跳转支付宝沙箱收银台。
-     * 用法：http://localhost:8123/api/payment/alipay/pay?orderId=xxx
-     */
-
     @GetMapping(value = "/pay", produces = "text/html;charset=UTF-8")
     public String payPage(@RequestParam Long orderId) {
         Order order = orderService.getById(orderId);
@@ -71,7 +51,7 @@ public class AlipayController {
     /**
      * 支付宝沙箱同步返回。
      * 用户支付完成后支付宝跳转到 return_url。
-     * 同步回调直接更新订单状态（不等异步通知），然后重定向到前端支付成功页。
+     * 同步回调直接更新订单状态（不等异步通知），然后重定向到前端影票详情页。
      */
     @GetMapping("/return")
     public String returnPage(@RequestParam String out_trade_no,
@@ -81,24 +61,24 @@ public class AlipayController {
             QueryWrapper qw = QueryWrapper.create().eq("orderNo", out_trade_no);
             Order order = orderService.getOne(qw);
             if (order == null) {
-                return "<script>window.location.replace('" + frontendBaseUrl() + "');</script>";
+                return "<script>window.location.replace('" + alipayConfig.getFrontendUrl() + "');</script>";
             }
 
             String status = order.getStatus();
-            // 仅待支付订单需处理支付成功；已支付（异步通知已处理）直接跳成功页；
+            // 仅待支付订单需处理支付成功；已支付（异步通知已处理）直接跳影票页；
             // 已取消/已退款/已完成等一律不复活，跳回首页。
             if (OrderStatusEnum.PENDING.getValue().equals(status)) {
                 orderService.handlePaymentSuccess(order, trade_no);
             } else if (!OrderStatusEnum.PAID.getValue().equals(status)) {
                 log.warn("同步回调跳过非待支付订单: orderNo={}, status={}", out_trade_no, status);
-                return "<script>window.location.replace('" + frontendBaseUrl() + "');</script>";
+                return "<script>window.location.replace('" + alipayConfig.getFrontendUrl() + "');</script>";
             }
 
-            return "<script>window.location.replace('" + frontendBaseUrl() + "/payment-success/" + order.getId() + "');</script>";
+            return "<script>window.location.replace('" + alipayConfig.getFrontendUrl() + "/payment-success/" + order.getId() + "');</script>";
         } catch (Exception e) {
             // 事务已在 OrderService.handlePaymentSuccess 内回滚，这里只需返回失败跳转
             log.error("同步回调处理异常: out_trade_no={}", out_trade_no, e);
-            return "<script>window.location.replace('" + frontendBaseUrl() + "');</script>";
+            return "<script>window.location.replace('" + alipayConfig.getFrontendUrl() + "');</script>";
         }
     }
 

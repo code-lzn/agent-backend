@@ -42,6 +42,17 @@ public class WeixinLoginServiceImpl implements IWeixinLoginService {
     private static final long ACCESS_TOKEN_REDIS_TTL = 7100;
 
     /**
+     * 强制刷新微信公众号 access_token（清 Redis 后重新获取）。
+     * 多实例共享 Redis 时，一个实例刷新 token 会使其他实例缓存的旧 token 失效，
+     * 调用此方法可强制拿到最新的有效 token。
+     */
+    private String forceRefreshAccessToken() throws IOException {
+        stringRedisTemplate.delete(ACCESS_TOKEN_REDIS_KEY);
+        log.info("微信 access_token 已从 Redis 清除，准备重新获取");
+        return fetchAndCacheAccessToken();
+    }
+
+    /**
      * 获取微信公众号 access_token（Redis 共享，多实例安全）
      * <p>
      * 所有实例共享同一个 token，避免各实例独立获取 token 导致互踢。
@@ -53,6 +64,13 @@ public class WeixinLoginServiceImpl implements IWeixinLoginService {
             return token;
         }
         // 2. Redis 没有或已过期，请求微信获取新 token
+        return fetchAndCacheAccessToken();
+    }
+
+    /**
+     * 向微信服务器请求新 access_token 并写入 Redis 共享。
+     */
+    private String fetchAndCacheAccessToken() throws IOException {
         Call<WeixinTokenRes> call = weixinApiService.getToken("client_credential",
                 weixinProperties.getAppId(), weixinProperties.getAppSecret());
         WeixinTokenRes res = call.execute().body();
@@ -65,8 +83,8 @@ public class WeixinLoginServiceImpl implements IWeixinLoginService {
         if (res.getAccess_token() == null) {
             throw new RuntimeException("获取微信 access_token 失败：access_token 为空");
         }
-        token = res.getAccess_token();
-        // 3. 写入 Redis 共享（TTL 略小于微信有效期，确保提前刷新）
+        String token = res.getAccess_token();
+        // 写入 Redis 共享（TTL 略小于微信有效期，确保提前刷新）
         stringRedisTemplate.opsForValue().set(ACCESS_TOKEN_REDIS_KEY, token,
                 ACCESS_TOKEN_REDIS_TTL, TimeUnit.SECONDS);
         log.info("微信 access_token 已刷新并写入 Redis 共享");
@@ -76,7 +94,20 @@ public class WeixinLoginServiceImpl implements IWeixinLoginService {
     @Override
     public String createQrCodeTicket() throws Exception {
         String accessToken = getAccessToken();
+        try {
+            return doCreateQrCodeTicket(accessToken);
+        } catch (RuntimeException e) {
+            // 40001 = access_token 失效（多实例互踢），清缓存重试一次
+            if (e.getMessage() != null && e.getMessage().contains("40001")) {
+                log.warn("access_token 失效（40001），清除 Redis 缓存后重试");
+                accessToken = forceRefreshAccessToken();
+                return doCreateQrCodeTicket(accessToken);
+            }
+            throw e;
+        }
+    }
 
+    private String doCreateQrCodeTicket(String accessToken) throws Exception {
         // 生成 ticket（使用唯一 scene_id，防止多个用户同时扫码时 ticket 冲突）
         String sceneStr = "login_" + System.currentTimeMillis() + "_" + (int)(Math.random() * 100000);
         WeixinQrCodeReq weixinQrCodeReq = WeixinQrCodeReq.builder()

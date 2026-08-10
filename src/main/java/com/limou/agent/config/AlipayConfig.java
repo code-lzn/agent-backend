@@ -19,6 +19,7 @@ public class AlipayConfig {
     private String notifyUrl;
     private String returnUrl;
     private String signType = "RSA2";
+    private String frontendUrl;
     private String charset = "utf-8";
     private String format = "json";
     private String gatewayUrl = "https://openapi-sandbox.dl.alipaydev.com/gateway.do";
