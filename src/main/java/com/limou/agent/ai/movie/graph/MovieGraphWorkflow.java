@@ -30,13 +30,23 @@ import java.util.Map;
  *                              ├── search_cinema ── END
  *                              ├── search_schedule  END
  *                              ├── get_seat_map ─── END
- *                              ├── lock_seats ───── END
- *                              ├── create_order ─── END
+ *                              ├── lock_seats -create_order ───── END
+ *                              ├──  ─── END
  *                              ├── pay_order ────── END
  *                              └── (default) ────── END
  * </pre>
  * <p>
  * 与 ReAct 模式的区别: LLM 不持有工具，由 Graph 根据意图精确路由到具体工具。
+ *   START → intent_classify ──┬── search_film ──── END
+ *                              ├── search_cinema ── END
+ *                              ├── search_nearby ── END
+ *                              ├── search_schedule── END
+ *                              ├── get_seat_map ─── END
+ *                              ├── lock_seats ──┬── create_order ── END  ← 唯一的两跳
+ *                              │                └── END (失败)
+ *                              ├── pay_order ────── END
+ *                              ├── query_order ──── END
+ *                              └── (greeting/chat)─ END (直通，无工具)
  */
 @Slf4j
 @Component

@@ -134,17 +134,19 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         checkUserFrozen(user);
         //4.记录用户的登录态
         request.getSession().setAttribute(UserConstant.USER_LOGIN_STATE, user);
-        //5.返回
-        return this.getLoginUserVO(user);
+        //5.生成 JWT Token（前端通过 Authorization header 携带，避免跨端 Cookie 串号）
+        LoginUserVO vo = this.getLoginUserVO(user);
+        vo.setToken(JwtUtils.createToken(user.getId(), user.getUserRole()));
+        return vo;
     }
 
     @Override
     public User getLoginUser(HttpServletRequest request) {
-        // 1. 先尝试从 Session 获取（Cookie 认证，向后兼容）
-        User userObj = (User) request.getSession().getAttribute(UserConstant.USER_LOGIN_STATE);
-        // 2. Session 中没有时，尝试从 JWT Token 注入的 request attribute 获取
+        // 1. 先尝试从 JWT Token 注入的 request attribute 获取（JWT 优先，避免跨端 Cookie 串号）
+        User userObj = (User) request.getAttribute(UserConstant.USER_LOGIN_STATE);
+        // 2. JWT 中没有时，尝试从 Session 获取（Cookie 认证，向后兼容）
         if (userObj == null || userObj.getId() == null) {
-            userObj = (User) request.getAttribute(UserConstant.USER_LOGIN_STATE);
+            userObj = (User) request.getSession().getAttribute(UserConstant.USER_LOGIN_STATE);
         }
         if (userObj == null || userObj.getId() == null) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
@@ -273,7 +275,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         // PRD 3.3.5：冻结账号禁止登录
         checkUserFrozen(user);
         request.getSession().setAttribute(UserConstant.USER_LOGIN_STATE, user);
-        return this.getLoginUserVO(user);
+        // ★ 生成 JWT Token（前端通过 Authorization header 携带，避免跨端 Cookie 串号）
+        LoginUserVO vo = this.getLoginUserVO(user);
+        vo.setToken(JwtUtils.createToken(user.getId(), user.getUserRole()));
+        return vo;
     }
     // ==================== resetPassword ====================
     @Override

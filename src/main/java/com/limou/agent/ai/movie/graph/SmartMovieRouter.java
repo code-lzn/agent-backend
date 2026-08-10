@@ -217,6 +217,7 @@ public class SmartMovieRouter {
      */
     private int countMergedSlots(ConversationState slots, ConversationState state) {
         if (slots == null)
+            //槽位没有提取到使用旧的
             return countStateSlots(state);
         int count = 0;
         if (has(slots.getFilmName()) || (state != null && has(state.getFilmName())))
