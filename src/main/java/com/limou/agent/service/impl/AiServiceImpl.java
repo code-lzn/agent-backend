@@ -284,7 +284,8 @@ public class AiServiceImpl implements AiService {
                 log.warn("保存卡片摘要到会话状态失败: conversationId={}", conversationId, e);
             }
             toolResultForPrompt = "已通过前端卡片展示。卡片数据摘要（供你引用卡片内容，不要原样输出）：\n" + cardSummary;
-            antiJsonRule = "\n\n## 重要规则\n工具执行结果已通过可视化卡片在前端展示，你**不要**重复/原样输出卡片中的原始数据（尤其不要输出JSON）。但你可以根据卡片摘要回答用户关于卡片内容的问题（例如某个场次属于哪家影院、价格、时间、余座等）。只需要用自然语言组织回复。";
+            antiJsonRule = "\n\n## 重要规则\n工具执行结果已通过可视化卡片在前端展示，你**不要**重复/原样输出卡片中的原始数据（尤其不要输出JSON）。但你可以根据卡片摘要回答用户关于卡片内容的问题（例如某个场次属于哪家影院、价格、时间、余座等）。只需要用自然语言组织回复。"
+                    + cardTypeHint(cardType);
         } else {
             toolResultForPrompt = hasTool ? toolResult : "无工具结果";
             antiJsonRule = "";
@@ -436,6 +437,26 @@ public class AiServiceImpl implements AiService {
     private String extractCardError(Map<String, Object> cardData) {
         Object error = cardData.get("error");
         return error != null && !error.toString().isBlank() ? error.toString() : null;
+    }
+
+    /**
+     * 根据实际展示的卡片类型注入话术约束，防止 LLM 话术与卡片类型脱节
+     * （如展示"场次列表"却回复"座位图已展示"——用户想看座位图时尤为致命）。
+     * 该约束在 prompt 规则之上做代码级兜底，LLM 即使自由发挥也跳不出。
+     */
+    private String cardTypeHint(String cardType) {
+        if (cardType == null) return "";
+        return switch (cardType) {
+            case "schedule_list" -> "\n\n**★ 当前展示的是『可选场次列表』卡片（不是座位图！）**\n"
+                    + "请在回复中如实说明「已为您列出可选场次」，并引导用户：点击场次卡片即可查看该场次的座位图，"
+                    + "或让用户告知想看哪一场（如「看08:00那场」）后再展示座位图。\n"
+                    + "**绝对禁止**：说「座位图已展示/已显示在页面上」、让用户「直接点座位图自己选」、"
+                    + "或提及「确认选座」按钮——本次展示的是场次列表，不是座位图。"
+                    + "即使对话状态里已有票数/影片信息，也不要臆测用户已选好场次。";
+            case "seat_map" -> "\n\n**★ 当前展示的是『座位图』卡片**\n"
+                    + "可以引导用户在座位图上点选座位，或说明想坐的位置（中间/靠前/靠后）。";
+            default -> "";
+        };
     }
 
     /** 判断卡片数据是否为空结果（如 sessions=[], films=[], cinemas=[]） */
