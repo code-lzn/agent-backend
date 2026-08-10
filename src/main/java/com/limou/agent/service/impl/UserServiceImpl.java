@@ -100,10 +100,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
         LoginUserVO vo = BeanUtil.copyProperties(user, LoginUserVO.class);
-        // 密码为默认密码 12345678 时需要引导设置
-        vo.setNeedSetPassword(
-                encryptPassword("12345678").equals(user.getUserPassword())
-        );
+        // 密码为空时需要引导设置（邮箱/微信注册无默认密码）
+        vo.setNeedSetPassword(StrUtil.isBlank(user.getUserPassword()));
         return vo;
 
 
@@ -129,6 +127,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         User user = this.mapper.selectOneByQuery(queryWrapper);
         if (user == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户不存在或密码错误");
+        }
+        if (StrUtil.isBlank(user.getUserPassword())) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "该账号未设置密码，请使用邮箱验证码或微信登录");
         }
         // PRD 3.3.5：冻结账号禁止登录
         checkUserFrozen(user);
@@ -268,7 +269,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             user = new User();
             user.setUserAccount(email);                          // ★ userAccount = 邮箱
             user.setUserName(email.split("@")[0]);               // 默认昵称：@前面部分
-            user.setUserPassword(encryptPassword("12345678"));
+            user.setUserPassword("");                             // 无默认密码，用空串满足 NOT NULL 约束
             user.setUserRole(UserRoleEnum.USER.getValue());
             save(user);
         }
@@ -368,7 +369,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             user = new User();
             user.setUserAccount(weixinAccount);
             user.setUserName("微信用户" + openid.substring(Math.max(0, openid.length() - 6)));
-            user.setUserPassword(encryptPassword("12345678"));
+            user.setUserPassword("");                             // 无默认密码，用空串满足 NOT NULL 约束
             user.setUserRole(UserRoleEnum.USER.getValue());
             save(user);
         }

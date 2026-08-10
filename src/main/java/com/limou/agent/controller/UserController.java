@@ -101,10 +101,6 @@ public class UserController {
         ThrowUtils.throwIf(userAddRequest == null, ErrorCode.PARAMS_ERROR);
         User user = new User();
         BeanUtil.copyProperties(userAddRequest, user);
-        // 默认密码 12345678
-        final String DEFAULT_PASSWORD = "12345678";
-        String encryptPassword = userService.encryptPassword(DEFAULT_PASSWORD);
-        user.setUserPassword(encryptPassword);
         boolean result = userService.save(user);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
         return ResultUtils.success(user.getId());
@@ -279,15 +275,20 @@ public class UserController {
     }
 
     /**
-     * 后台 - 重置用户密码（恢复为默认 12345678）。仅管理员。PRD 3.3.5
+     * 后台 - 重置用户密码。传 newPassword 则设为指定密码，不传则清空密码。仅管理员。PRD 3.3.5
      */
     @PostMapping("/admin/reset-password")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
-    public BaseResponse<Boolean> adminResetPassword(@RequestParam("id") Long id) {
+    public BaseResponse<Boolean> adminResetPassword(@RequestParam("id") Long id,
+                                                    @RequestParam(value = "newPassword", required = false) String newPassword) {
         ThrowUtils.throwIf(id == null || id <= 0, ErrorCode.PARAMS_ERROR);
         User user = userService.getById(id);
         ThrowUtils.throwIf(user == null, ErrorCode.NOT_FOUND_ERROR, "用户不存在");
-        user.setUserPassword(userService.encryptPassword("12345678"));
+        if (StrUtil.isNotBlank(newPassword)) {
+            user.setUserPassword(userService.encryptPassword(newPassword));
+        } else {
+            user.setUserPassword(userService.encryptPassword("12345678"));
+        }
         boolean result = userService.updateById(user);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
         return ResultUtils.success(true);
