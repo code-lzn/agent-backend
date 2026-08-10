@@ -22,6 +22,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.util.DigestUtils;
 
@@ -209,6 +210,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
 
 
     // ==================== sendMailCode ====================
+    @Async
     @Override
     public void sendMailCode(String email) {
         if (!Validator.isEmail(email)) {
