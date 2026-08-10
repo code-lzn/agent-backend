@@ -1,7 +1,11 @@
 package com.limou.agent.controller;
 
+import com.limou.agent.exception.BusinessException;
+import com.limou.agent.exception.ErrorCode;
 import com.limou.agent.mq.OrderStatusNotifier;
+import com.limou.agent.service.UserService;
 import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -26,11 +30,18 @@ public class OrderStatusSSEController {
     @Resource
     private OrderStatusNotifier orderStatusNotifier;
 
+    @Resource
+    private UserService userService;
+
     /**
-     * 订阅当前用户的订单状态变更
+     * 订阅当前用户的订单状态变更（需校验 userId 与登录用户一致）
      */
     @GetMapping("/order/{userId}")
-    public SseEmitter subscribe(@PathVariable Long userId) {
+    public SseEmitter subscribe(@PathVariable Long userId, HttpServletRequest request) {
+        Long loginUserId = userService.getLoginUser(request).getId();
+        if (!loginUserId.equals(userId)) {
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "无权订阅他人订单事件");
+        }
         return orderStatusNotifier.register(userId);
     }
 }
