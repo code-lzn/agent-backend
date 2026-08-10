@@ -37,6 +37,17 @@ public class UserWatchedFilmController {
         return ResultUtils.success(null);
     }
 
+    @PostMapping("/toggle/{filmId}")
+    public BaseResponse<Map<String, Object>> toggleWatched(@PathVariable Long filmId,
+                                                            HttpServletRequest request) {
+        Long userId = getLoginUserId(request);
+        boolean watched = userWatchedFilmService.toggleWatched(userId, filmId);
+        Map<String, Object> result = new HashMap<>();
+        result.put("watched", watched);
+        result.put("filmId", filmId);
+        return ResultUtils.success(result);
+    }
+
     @GetMapping("/isWatched/{filmId}")
     public BaseResponse<Map<String, Object>> isWatched(@PathVariable Long filmId,
                                                         HttpServletRequest request) {
