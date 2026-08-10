@@ -236,8 +236,24 @@ public class AiServiceImpl implements AiService {
             String message, String conversationId, Long userId, GraphIntentResult preclassifiedIntent) {
         log.info("GraphWorkflow 流式: conversationId={}, userId={}", conversationId, userId);
 
-        // 1. Graph 工作流（同步阻塞，offload 到 boundedElastic，避免阻塞 Netty 线程）
-        return Mono.fromCallable(() ->
+        // ★ 先发 thinking 事件（零延迟，用户立刻看到反馈），
+        //    与后面 offload 的 Graph 执行并发——工具跑的同时前端就在渲染"正在分析..."
+        Flux<ServerSentEvent<String>> thinkingFlux = Flux.just(
+                ServerSentEvent.<String>builder()
+                        .data(JSONUtil.toJsonStr(Map.of(
+                                "d", "正在分析您的需求...",
+                                "type", "status")))
+                        .build(),
+                ServerSentEvent.<String>builder()
+                        .data(JSONUtil.toJsonStr(Map.of(
+                                "d", "正在分析您的需求...",
+                                "type", "tool_start",
+                                "toolName", "意图识别")))
+                        .build()
+        );
+
+        // Graph 工作流（同步阻塞，offload 到 boundedElastic，避免阻塞 Netty 线程）
+        Flux<ServerSentEvent<String>> mainFlux = Mono.fromCallable(() ->
                         movieGraphWorkflow.execute(message, conversationId, userId, preclassifiedIntent))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapMany(decision -> {
@@ -245,7 +261,7 @@ public class AiServiceImpl implements AiService {
                         return blockedFlux(decision.getBlockMessage(), conversationId);
                     }
 
-        // 2. 准备流式回复
+        // 准备流式回复
         String intent = decision.getIntent();
         String toolResult = decision.getToolResult();
         boolean hasTool = toolResult != null && !toolResult.isEmpty();
@@ -300,22 +316,8 @@ public class AiServiceImpl implements AiService {
 
         StringBuilder fullResponse = new StringBuilder();
 
-        Flux<ServerSentEvent<String>> responseStream;
-
-        // ★ 前置 thinking 事件：与 reactCore 一致，告知用户正在分析
-        Flux<ServerSentEvent<String>> prefixEvents = Flux.just(
-                ServerSentEvent.<String>builder()
-                        .data(JSONUtil.toJsonStr(Map.of(
-                                "d", "正在分析您的需求...",
-                                "type", "status")))
-                        .build(),
-                ServerSentEvent.<String>builder()
-                        .data(JSONUtil.toJsonStr(Map.of(
-                                "d", "正在分析您的需求...",
-                                "type", "tool_start",
-                                "toolName", "意图识别")))
-                        .build()
-        );
+        // ★ thinking 已提前发送，这里只拼后续事件：卡片 / 工具提示 / LLM 流式文本
+        Flux<ServerSentEvent<String>> suffixEvents;
 
         if (hasCard) {
             // 卡片事件：前端渲染为可视化卡片
@@ -323,20 +325,22 @@ public class AiServiceImpl implements AiService {
             cardPayload.put("type", "card");
             cardPayload.put("cardType", cardType);
             cardPayload.put("data", decision.getCardData());
-            prefixEvents = prefixEvents.concatWith(Flux.just(
+            suffixEvents = Flux.just(
                     ServerSentEvent.<String>builder()
                             .data(JSONUtil.toJsonStr(cardPayload))
-                            .build()));
+                            .build());
         } else if (hasTool) {
-            // 无卡片时显示旧的 tool_start 提示
+            // 无卡片时显示工具提示
             String displayName = INTENT_TOOL_NAMES.getOrDefault(decision.getToolName(), decision.getToolName());
-            prefixEvents = prefixEvents.concatWith(Flux.just(
+            suffixEvents = Flux.just(
                     ServerSentEvent.<String>builder()
                             .data(JSONUtil.toJsonStr(Map.of(
                                     "d", "正在" + displayName + "...",
                                     "type", "tool_start",
                                     "toolName", decision.getToolName())))
-                            .build()));
+                            .build());
+        } else {
+            suffixEvents = Flux.empty();
         }
 
         // 文本流：LLM 自然语言回复
@@ -349,9 +353,7 @@ public class AiServiceImpl implements AiService {
                             .build();
                 });
 
-        responseStream = prefixEvents.concatWith(textStream);
-
-        return responseStream
+        return suffixEvents.concatWith(textStream)
                 .concatWith(Mono.just(
                         ServerSentEvent.<String>builder()
                                 .event("done")
@@ -378,7 +380,10 @@ public class AiServiceImpl implements AiService {
                             decision.getCardData());
                     movieStateManager.refreshTtl(conversationId);
                 });
-        });  // flatMapMany: offload Graph 阻塞调用到 boundedElastic
+        });  // flatMapMany
+
+        // ★ thinking 先发，main 并发执行——用户立刻看到反馈，不用等工具跑完
+        return thinkingFlux.concatWith(mainFlux);
     }
 
     // ---- 智能路由 ----

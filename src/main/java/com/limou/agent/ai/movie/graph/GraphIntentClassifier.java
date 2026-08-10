@@ -10,6 +10,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.deepseek.DeepSeekChatModel;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -83,6 +84,9 @@ public class GraphIntentClassifier {
 
     @Resource
     private DashScopeChatModel dashscopeChatModel;
+
+//    @Resource
+//    private DeepSeekChatModel deepSeekChatModel;
 
     @Resource
     private ObjectMapper objectMapper;

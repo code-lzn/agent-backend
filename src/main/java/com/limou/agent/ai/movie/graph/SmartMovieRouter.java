@@ -59,6 +59,13 @@ public class SmartMovieRouter {
             "(我|我人|我当前|我目前|我这边).{0,10}(在|位于|位置|定位|坐标|在.{0,5}哪)"
                     + "|(定位|位置|坐标|地址).{0,5}(我|在哪|查询|一下)"
                     + "|(这是|我现在).{0,5}(什么|哪个|哪)");
+    /** ★ 多意图连接词：消息里出现"然后/接着/顺便/还有"等 + 第二个动作 → 单意图 Graph 处理不了，走 REACT */
+    private static final Pattern MULTI_INTENT_CONNECTOR = Pattern.compile(
+            "(然后|接着|之后|顺便|还有|同时|另外).{0,15}(帮|查|搜|找|订|买|下单|选)");
+    /** ★ 顺序多意图："先X再Y"、"先看看X然后Y" */
+    private static final Pattern MULTI_INTENT_SEQUENTIAL = Pattern.compile(
+            "先.{0,10}(查|搜|找|看看).{0,15}(再|然后)");
+
     /** "附近有什么"、"周围有好吃的吗"—— 基础定位查询，需要先定位再搜索 */
     private static final Pattern AROUND_ME_PATTERN = Pattern.compile(
             "(附近|周边|周围|本地|这里).{0,5}(有|能|可以|什么|哪些|哪里|好玩|好吃)");
@@ -124,6 +131,12 @@ public class SmartMovieRouter {
         if (message.contains("包场") || message.contains("全包") || message.contains("整个厅")) {
             log.info("Router: 规则命中 包场 → GRAPH (全场锁座下单)");
             return SmartRouteResult.graph(null);
+        }
+
+        // ★ 多意图（"查场次然后帮我订""先看看再选"）→ REACT，Graph 单意图模型处理不了组合意图
+        if (matches(MULTI_INTENT_CONNECTOR, message) || matches(MULTI_INTENT_SEQUENTIAL, message)) {
+            log.info("Router: 规则命中 多意图 → REACT");
+            return SmartRouteResult.react();
         }
 
         // ★ 已有上下文 → 强制 Graph（维护多轮对话状态）
@@ -198,12 +211,12 @@ public class SmartMovieRouter {
             GraphIntentResult result = intentClassifier.classify(message, state);
             int totalFilled = countMergedSlots(result.getSlots(), state);
 
-            if (totalFilled >= 4) {
-                log.info("Router: LLM 判定 槽位{}/7 ≥4 → REACT", totalFilled);
+            if (totalFilled >= 3) {
+                log.info("Router: LLM 判定 槽位{}/7 ≥3 → REACT", totalFilled);
                 return SmartRouteResult.react();
             }
 
-            log.info("Router: LLM 判定 槽位{}/7 <4 → GRAPH", totalFilled);
+            log.info("Router: LLM 判定 槽位{}/7 <3 → GRAPH", totalFilled);
             return SmartRouteResult.graph(result);
 
         } catch (Exception e) {
