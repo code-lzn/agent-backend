@@ -1,5 +1,7 @@
 package com.limou.agent.controller;
 
+import com.limou.agent.annotation.AuthCheck;
+import com.limou.agent.constant.UserConstant;
 import com.limou.agent.common.BaseResponse;
 import com.limou.agent.common.ResultUtils;
 import com.limou.agent.exception.ErrorCode;
@@ -32,6 +34,7 @@ public class SystemConfigController {
      * @return {@code true} 保存成功，{@code false} 保存失败
      */
     @PostMapping("save")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> save(@RequestBody SystemConfig systemConfig) {
         return ResultUtils.success(systemConfigService.save(systemConfig));
     }
@@ -43,6 +46,7 @@ public class SystemConfigController {
      * @return {@code true} 删除成功，{@code false} 删除失败
      */
     @DeleteMapping("remove/{id}")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> remove(@PathVariable Long id) {
         return ResultUtils.success(systemConfigService.removeById(id));
     }
@@ -54,6 +58,7 @@ public class SystemConfigController {
      * @return {@code true} 更新成功，{@code false} 更新失败
      */
     @PutMapping("update")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> update(@RequestBody SystemConfig systemConfig) {
         return ResultUtils.success(systemConfigService.updateById(systemConfig));
     }
@@ -64,6 +69,7 @@ public class SystemConfigController {
      * @return 所有数据
      */
     @GetMapping("list")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<List<SystemConfig>> list() {
         return ResultUtils.success(systemConfigService.list());
     }
@@ -75,6 +81,7 @@ public class SystemConfigController {
      * @return 详情
      */
     @GetMapping("getInfo/{id}")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<SystemConfig> getInfo(@PathVariable Long id) {
         return ResultUtils.success(systemConfigService.getById(id));
     }
@@ -86,6 +93,7 @@ public class SystemConfigController {
      * @return 分页对象
      */
     @GetMapping("page")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Page<SystemConfig>> page(Page<SystemConfig> page) {
         return ResultUtils.success(systemConfigService.page(page));
     }
@@ -106,6 +114,7 @@ public class SystemConfigController {
      * 根据配置键更新。
      */
     @PutMapping("/updateByKey")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> updateByKey(@RequestBody SystemConfig systemConfig) {
         ThrowUtils.throwIf(systemConfig == null || systemConfig.getConfigKey() == null, ErrorCode.PARAMS_ERROR);
         QueryWrapper qw = QueryWrapper.create().eq("configKey", systemConfig.getConfigKey());

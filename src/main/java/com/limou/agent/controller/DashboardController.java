@@ -1,5 +1,7 @@
 package com.limou.agent.controller;
 
+import com.limou.agent.annotation.AuthCheck;
+import com.limou.agent.constant.UserConstant;
 import com.limou.agent.common.BaseResponse;
 import com.limou.agent.common.ResultUtils;
 import com.limou.agent.model.entity.Order;
@@ -42,6 +44,7 @@ public class DashboardController {
     private ScheduleService scheduleService;
 
     @GetMapping("/stats")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<DashboardVO> getStats() {
         DashboardVO vo = new DashboardVO();
 

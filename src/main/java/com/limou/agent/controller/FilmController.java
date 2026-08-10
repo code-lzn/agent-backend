@@ -1,5 +1,7 @@
 package com.limou.agent.controller;
 
+import com.limou.agent.annotation.AuthCheck;
+import com.limou.agent.constant.UserConstant;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import com.limou.agent.common.BaseResponse;
@@ -142,7 +144,9 @@ public class FilmController {
      * 保存。
      */
     @PostMapping("save")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Long> save(@RequestBody Film film) {
+        validateFilmStatusChange(film);
         boolean result = filmService.save(film);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
         // 影片新增后刷新模糊匹配索引 + RAG 向量库，无需重启即可被检索
@@ -154,6 +158,7 @@ public class FilmController {
      * 根据主键删除。
      */
     @DeleteMapping("remove/{id}")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> remove(@PathVariable Long id) {
         ThrowUtils.throwIf(id == null || id <= 0, ErrorCode.PARAMS_ERROR);
         // PRD 3.3.3.1 交互规则③：存在"有效"排片场次（今天及以后未放映）的影片禁止删除，仅允许下线
@@ -161,7 +166,7 @@ public class FilmController {
                 .eq("filmId", id)
                 .ge("showDate", Date.valueOf(LocalDate.now())));
         ThrowUtils.throwIf(scheduleCount > 0, ErrorCode.OPERATION_ERROR,
-                "该影片存在未放映的排片场次，禁止删除，请先下线");
+                "该影片存在未放映的排片场次，禁止删除，请先在「场次管理」中删除对应场次");
         boolean result = filmService.removeById(id);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
         filmCacheRefresher.refreshAll();
@@ -172,7 +177,9 @@ public class FilmController {
      * 根据主键更新。
      */
     @PutMapping("update")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> update(@RequestBody Film film) {
+        validateFilmStatusChange(film);
         boolean result = filmService.updateById(film);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
         filmCacheRefresher.refreshAll();
@@ -180,9 +187,10 @@ public class FilmController {
     }
 
     /**
-     * 查询所有。
+     * 查询所有（B 端影片管理/排期页下拉用，C 端影院详情已改走 /schedule/list）。
      */
     @GetMapping("listAll")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<List<Film>> listAll() {
         List<Film> list = filmService.list();
         filmService.enrichFormatTags(list);
@@ -193,6 +201,7 @@ public class FilmController {
      * 后台分页查询。
      */
     @PostMapping("page")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Page<Film>> page(@RequestBody FilmQueryRequest filmQueryRequest) {
         Page<Film> filmPage = filmService.queryFilmPage(filmQueryRequest);
         return ResultUtils.success(filmPage);
@@ -214,14 +223,41 @@ public class FilmController {
      * 修改影片状态（后台管理）。
      */
     @PutMapping("/status/{id}")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> updateStatus(@PathVariable Long id, @RequestParam String status) {
         Film film = filmService.getById(id);
         ThrowUtils.throwIf(film == null, ErrorCode.NOT_FOUND_ERROR);
         film.setStatus(status);
+        validateFilmStatusChange(film);
         boolean result = filmService.updateById(film);
         // 状态变更影响 hot/published 集合，刷新缓存
         filmCacheRefresher.refreshAll();
         return ResultUtils.success(result);
+    }
+
+    /**
+     * 影片状态流转校验：
+     * 1. 未到上映日期（releaseDate 晚于今天）的影片不能设置为「热映中(hot)」；
+     * 2. 下线(offline)参照删除规则——存在未放映排片场次（showDate >= 今天）的影片禁止下线。
+     */
+    private void validateFilmStatusChange(Film film) {
+        if (film == null) {
+            return;
+        }
+        // 规则1：未到上映日期不能设为热映中
+        if ("hot".equals(film.getStatus()) && film.getReleaseDate() != null
+                && film.getReleaseDate().toLocalDate().isAfter(LocalDate.now())) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "影片未到上映日期（" + film.getReleaseDate() + "），不能设置为热映中");
+        }
+        // 规则2：参照删除，存在未放映排片场次的影片禁止下线
+        if ("offline".equals(film.getStatus()) && film.getId() != null
+                && scheduleService.count(QueryWrapper.create()
+                        .eq("filmId", film.getId())
+                        .ge("showDate", Date.valueOf(LocalDate.now()))) > 0) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "该影片存在未放映的排片场次，禁止下线，请先在「场次管理」中删除对应场次");
+        }
     }
 
 }

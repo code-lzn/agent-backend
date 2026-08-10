@@ -205,6 +205,11 @@ public class MovieStateManager {
         if (newSlots.getCinemaName() != null && !newSlots.getCinemaName().equals(state.getCinemaName())) {
             state.setCinemaName(newSlots.getCinemaName());
             searchPhaseChanged = true;
+            // ★ 用户明确换了影院名 → 旧的 cinemaId 可能对应旧影院，清空让节点按新名称重新解析
+            //   （LLM 通常只提取名称不给 ID，若不清理会带着旧 cinemaId 搜错影院）
+            if (newSlots.getCinemaId() == null) {
+                state.setCinemaId(null);
+            }
         }
         if (newSlots.getShowDate() != null && !newSlots.getShowDate().equals(state.getShowDate())) {
             state.setShowDate(newSlots.getShowDate());

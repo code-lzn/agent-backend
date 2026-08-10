@@ -1,5 +1,7 @@
 package com.limou.agent.controller;
 
+import com.limou.agent.annotation.AuthCheck;
+import com.limou.agent.constant.UserConstant;
 import cn.hutool.core.lang.Validator;
 import cn.hutool.core.util.StrUtil;
 import com.limou.agent.common.BaseResponse;
@@ -51,6 +53,7 @@ public class CinemaController {
      * @return {@code true} 保存成功，{@code false} 保存失败
      */
     @PostMapping("save")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> save(@RequestBody Cinema cinema) {
         ThrowUtils.throwIf(cinema == null, ErrorCode.PARAMS_ERROR, "参数为空");
         checkCinemaPhone(cinema.getPhone());
@@ -64,6 +67,7 @@ public class CinemaController {
      * @return {@code true} 删除成功，{@code false} 删除失败
      */
     @DeleteMapping("remove/{id}")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> remove(@PathVariable Long id) {
         ThrowUtils.throwIf(id == null || id <= 0, ErrorCode.PARAMS_ERROR);
         // PRD 3.3.3.2 交互规则③：有"未放映"场次（今天及以后）的影院禁止删除，需先清空场次
@@ -84,6 +88,7 @@ public class CinemaController {
      * @return {@code true} 更新成功，{@code false} 更新失败
      */
     @PutMapping("update")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> update(@RequestBody Cinema cinema) {
         ThrowUtils.throwIf(cinema == null, ErrorCode.PARAMS_ERROR, "参数为空");
         checkCinemaPhone(cinema.getPhone());
@@ -151,6 +156,7 @@ public class CinemaController {
      * @return 分页对象
      */
     @GetMapping("page")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Page<Cinema>> page(Page<Cinema> page) {
         return ResultUtils.success(cinemaService.page(page));
     }
