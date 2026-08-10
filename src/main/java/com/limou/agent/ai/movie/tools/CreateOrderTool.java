@@ -9,6 +9,7 @@ import com.limou.agent.mapper.*;
 import com.limou.agent.model.dto.movie.ConversationState;
 import com.limou.agent.model.entity.*;
 import com.limou.agent.model.enums.OrderStatusEnum;
+import com.limou.agent.model.enums.SeatStatusEnum;
 import com.limou.agent.mq.OrderTimeoutConfig;
 import com.limou.agent.mq.OrderTimeoutMessage;
 import com.limou.agent.service.SystemConfigService;
@@ -93,7 +94,7 @@ public class CreateOrderTool extends BaseTool {
             }
 
             List<Seat> notLocked = seats.stream()
-                    .filter(s -> !"locked".equals(s.getStatus()))
+                    .filter(s -> !SeatStatusEnum.LOCKED.getValue().equals(s.getStatus()))
                     .collect(Collectors.toList());
             if (!notLocked.isEmpty()) {
                 return "{\"success\":false,\"error\":\"部分座位状态异常，请重新选座\"}";

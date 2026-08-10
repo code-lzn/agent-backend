@@ -14,6 +14,7 @@ import com.limou.agent.model.dto.order.PayOrderRequest;
 import com.limou.agent.model.entity.*;
 import com.limou.agent.model.enums.CancelReasonEnum;
 import com.limou.agent.model.enums.OrderStatusEnum;
+import com.limou.agent.model.enums.SeatStatusEnum;
 import com.limou.agent.model.vo.OrderVO;
 import com.limou.agent.model.vo.PayOrderVO;
 import com.limou.agent.model.vo.SeatLockResult;
@@ -97,7 +98,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
 
         // Redis 锁 + 乐观锁（替代 FOR UPDATE 行锁）
         SeatLockResult lockResult = seatLockService.lockSeats(
-                request.getScheduleId(), request.getSeatIds(), getLockDuration());
+                request.getScheduleId(), request.getSeatIds(), getLockDuration(), userId.toString());
         if (!lockResult.isSuccess()) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR,
                     "锁座失败：" + formatLockError(lockResult));
@@ -144,9 +145,9 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
                 /* 解析失败跳过 */ }
         }
 
-        // 2. 锁座（幂等：已锁定的座位只续 Redis 锁，available 的走乐观锁）
+        // 2. 锁座（幂等：同一 userId 已锁的座位走 owner 校验放行，其他人已锁则拒绝）
         SeatLockResult lockResult = seatLockService.lockSeats(
-                request.getScheduleId(), request.getSeatIds(), getLockDuration());
+                request.getScheduleId(), request.getSeatIds(), getLockDuration(), userId.toString());
         if (!lockResult.isSuccess()) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR,
                     "座位已被占用：" + formatLockError(lockResult));
@@ -346,7 +347,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
         if (CollUtil.isNotEmpty(seatIds)) {
             List<Seat> seats = seatService.listByIds(seatIds);
             log.info("[handlePaymentSuccess] 查询到座位 {} 个, orderId={}, seatIds={}", seats.size(), order.getId(), seatIds);
-            seats.forEach(s -> s.setStatus("sold"));
+            seats.forEach(s -> s.setStatus(SeatStatusEnum.SOLD.getValue()));
             seatService.updateBatch(seats);
 
             // 支付成功才生成票：每座位一张（独立 8 位取票码）；幂等避免重复生成
@@ -686,7 +687,7 @@ public class OrderServiceImpl extends ServiceImpl<OrderMapper, Order> implements
     public int releaseOrphanLocks() {
         // 查找所有 locked 状态的座位
         List<Seat> lockedSeats = seatService.list(
-                QueryWrapper.create().eq("status", "locked"));
+                QueryWrapper.create().eq("status", SeatStatusEnum.LOCKED.getValue()));
         if (CollUtil.isEmpty(lockedSeats)) {
             return 0;
         }

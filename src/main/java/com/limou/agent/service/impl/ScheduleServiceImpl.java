@@ -11,6 +11,7 @@ import com.limou.agent.model.entity.Film;
 import com.limou.agent.model.entity.Hall;
 import com.limou.agent.model.entity.Seat;
 import com.limou.agent.model.entity.Schedule;
+import com.limou.agent.model.enums.SeatStatusEnum;
 import com.limou.agent.model.vo.ScheduleVO;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
@@ -445,7 +446,7 @@ public class ScheduleServiceImpl extends ServiceImpl<ScheduleMapper, Schedule> i
                 boolean isVip = layout.vipRows.contains(row) || layout.vipCells.contains(row + "," + col);
                 seat.setZone(isVip ? "vip" : "regular");
 
-                seat.setStatus("available");
+                seat.setStatus(SeatStatusEnum.AVAILABLE.getValue());
                 seats.add(seat);
             }
         }

@@ -18,9 +18,10 @@ public interface SeatLockService {
      * @param scheduleId   场次ID
      * @param seatIds      座位ID列表
      * @param leaseMinutes Redis 锁租期（分钟），与锁座时长/订单超时对齐
+     * @param lockOwner    锁归属标识（用户ID 或会话ID），用于幂等校验——同一 owner 重复锁同一个座位时放行，不同 owner 则拒绝
      * @return 锁定结果：success=true 时含 lockedSeats；false 时含冲突座位
      */
-    SeatLockResult lockSeats(Long scheduleId, List<Long> seatIds, int leaseMinutes);
+    SeatLockResult lockSeats(Long scheduleId, List<Long> seatIds, int leaseMinutes, String lockOwner);
 
     /**
      * 释放座位 Redis 锁（forceUnlock，不改变座位状态）。

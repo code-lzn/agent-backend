@@ -13,6 +13,7 @@ import com.limou.agent.model.vo.SeatMapVO;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
 import com.limou.agent.model.entity.Seat;
+import com.limou.agent.model.enums.SeatStatusEnum;
 import com.limou.agent.mapper.SeatMapper;
 import com.limou.agent.service.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -130,7 +131,7 @@ public class SeatServiceImpl extends ServiceImpl<SeatMapper, Seat> implements Se
      */
     private void cleanOrphanLocks(Long scheduleId, List<Seat> seats) {
         List<Seat> lockedSeats = seats.stream()
-                .filter(s -> "locked".equals(s.getStatus()))
+                .filter(s -> SeatStatusEnum.LOCKED.getValue().equals(s.getStatus()))
                 .collect(Collectors.toList());
         if (lockedSeats.isEmpty()) {
             return;
@@ -143,8 +144,13 @@ public class SeatServiceImpl extends ServiceImpl<SeatMapper, Seat> implements Se
                         .eq("status", "pending"));
         if (pendingOrders.isEmpty()) {
             for (Seat seat : lockedSeats) {
-                seat.setStatus("available");
-                mapper.update(Seat.builder().id(seat.getId()).status("available").build());
+                seat.setStatus(SeatStatusEnum.AVAILABLE.getValue());
+                // ★ 乐观锁条件更新：只有 status 仍是 locked 才改，防止覆盖并发操作
+                mapper.updateByQuery(
+                        Seat.builder().status(SeatStatusEnum.AVAILABLE.getValue()).build(),
+                        QueryWrapper.create()
+                                .eq("id", seat.getId())
+                                .eq("status", SeatStatusEnum.LOCKED.getValue()));
             }
             return;
         }
@@ -159,8 +165,13 @@ public class SeatServiceImpl extends ServiceImpl<SeatMapper, Seat> implements Se
 
         for (Seat seat : lockedSeats) {
             if (!validLockedSeatIds.contains(seat.getId())) {
-                seat.setStatus("available");
-                mapper.update(Seat.builder().id(seat.getId()).status("available").build());
+                seat.setStatus(SeatStatusEnum.AVAILABLE.getValue());
+                // ★ 乐观锁条件更新：只有 status 仍是 locked 才改
+                mapper.updateByQuery(
+                        Seat.builder().status(SeatStatusEnum.AVAILABLE.getValue()).build(),
+                        QueryWrapper.create()
+                                .eq("id", seat.getId())
+                                .eq("status", SeatStatusEnum.LOCKED.getValue()));
             }
         }
     }

@@ -11,6 +11,7 @@ import com.limou.agent.model.entity.Cinema;
 import com.limou.agent.model.entity.Hall;
 import com.limou.agent.model.entity.Schedule;
 import com.limou.agent.model.entity.Seat;
+import com.limou.agent.model.enums.SeatStatusEnum;
 import com.mybatisflex.core.query.QueryWrapper;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -213,7 +214,7 @@ public class SearchSchedulesTool extends BaseTool {
                 long availableSeats = seatMapper.selectCountByQuery(
                         QueryWrapper.create()
                                 .eq(Seat::getScheduleId, s.getId())
-                                .eq(Seat::getStatus, "available")
+                                .eq(Seat::getStatus, SeatStatusEnum.AVAILABLE.getValue())
                 );
 
                 // 统计总座位数

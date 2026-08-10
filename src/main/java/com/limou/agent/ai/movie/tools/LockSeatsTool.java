@@ -9,6 +9,7 @@ import com.limou.agent.mapper.SeatMapper;
 import com.limou.agent.model.dto.movie.ConversationState;
 import com.limou.agent.model.entity.Schedule;
 import com.limou.agent.model.entity.Seat;
+import com.limou.agent.model.enums.SeatStatusEnum;
 import com.mybatisflex.core.query.QueryWrapper;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -28,11 +29,16 @@ import java.util.stream.Collectors;
 
 /**
  * 座位锁定工具
- * 使用数据库乐观锁 + Redis 分布式锁防止超卖
+ * 使用数据库乐观锁 + Redis 分布式锁 + owner 归属标记防止超卖
  */
 @Slf4j
 @Component
 public class LockSeatsTool extends BaseTool {
+
+    private static final String LOCK_KEY_PREFIX = "seat:lock:";
+    private static final String OWNER_KEY_PREFIX = "seat:owner:";
+    /** Redis 锁 TTL（分钟），与锁座时长对齐 */
+    private static final long LOCK_TTL_MINUTES = 15;
 
     @Resource
     private SeatMapper seatMapper;
@@ -73,24 +79,41 @@ public class LockSeatsTool extends BaseTool {
                 return "{\"success\":false,\"error\":\"座位不存在: " + missingIds + "\"}";
             }
 
-            // 2. 检查哪些座位不可用（自动清理过期锁）
+            // 2. 按状态分类：available → 直接可锁；locked → 查 owner 归属
+            String convId = ConversationContext.get();
             List<Map<String, Object>> unavailableSeats = new ArrayList<>();
             List<Seat> availableSeats = new ArrayList<>();
 
             for (Seat seat : seats) {
-                if ("available".equals(seat.getStatus())) {
+                if (SeatStatusEnum.AVAILABLE.getValue().equals(seat.getStatus())) {
                     availableSeats.add(seat);
-                } else if ("locked".equals(seat.getStatus())) {
-                    // 检查 Redis 锁是否已过期（过期 = 脏数据，自动释放）
-                    String lockKey = "seat:lock:" + scheduleId + ":" + seat.getId();
-                    RLock lock = redissonClient.getLock(lockKey);
-                    if (!lock.isLocked()) {
-                        // 锁已过期但 DB 状态没更新 → 自动修复
-                        seatMapper.update(Seat.builder()
-                                .id(seat.getId()).status("available").build());
-                        availableSeats.add(seat);
-                        log.info("自动释放过期锁: scheduleId={}, seat={}", scheduleId, seat.getSeatLabel());
+                } else if (SeatStatusEnum.LOCKED.getValue().equals(seat.getStatus())) {
+                    // ★ 用 owner key 替代 isLocked() 判断归属（避免 TOCTOU）
+                    String ownerKey = OWNER_KEY_PREFIX + scheduleId + ":" + seat.getId();
+                    String existingOwner = (String) redissonClient.getBucket(ownerKey).get();
+                    if (existingOwner == null) {
+                        // owner key 已过期但 DB 仍是 locked → 孤儿锁，用乐观锁修复
+                        int fixed = seatMapper.updateByQuery(
+                                Seat.builder().status(SeatStatusEnum.AVAILABLE.getValue()).build(),
+                                QueryWrapper.create()
+                                        .eq("id", seat.getId())
+                                        .eq("status", SeatStatusEnum.LOCKED.getValue()));
+                        if (fixed > 0) {
+                            availableSeats.add(seat);
+                            log.info("自动释放孤儿锁: scheduleId={}, seat={}", scheduleId, seat.getSeatLabel());
+                        } else {
+                            // 并发时已被其他人改掉（如卖出了）→ 不可用
+                            Map<String, Object> info = new HashMap<>();
+                            info.put("seatId", seat.getId());
+                            info.put("seatLabel", seat.getSeatLabel());
+                            info.put("status", "sold");
+                            unavailableSeats.add(info);
+                        }
+                    } else if (convId != null && convId.equals(existingOwner)) {
+                        // 同一会话 → 幂等（从 unavailable 移除，后续走幂等成功逻辑）
+                        // 不加入 availableSeats（不需要重复 DB 更新）
                     } else {
+                        // 其他会话持有 → 冲突
                         Map<String, Object> info = new HashMap<>();
                         info.put("seatId", seat.getId());
                         info.put("seatLabel", seat.getSeatLabel());
@@ -107,8 +130,7 @@ public class LockSeatsTool extends BaseTool {
             }
 
             if (!unavailableSeats.isEmpty()) {
-                // ★ 幂等检查：过滤掉当前会话已锁定的座位（避免重复锁失败）
-                String convId = ConversationContext.get();
+                // ★ 幂等检查：过滤掉当前会话已锁定的座位
                 List<Map<String, Object>> trulyUnavailable = new ArrayList<>();
                 if (convId != null) {
                     try {
@@ -152,7 +174,6 @@ public class LockSeatsTool extends BaseTool {
                 }
 
                 if (!trulyUnavailable.isEmpty()) {
-                    // 有真正被他人占用的座位 → 推荐替代方案
                     List<Map<String, Object>> alternatives = findAlternatives(scheduleId, trulyUnavailable);
                     Map<String, Object> result = new HashMap<>();
                     result.put("success", false);
@@ -164,20 +185,14 @@ public class LockSeatsTool extends BaseTool {
                 // trulyUnavailable 为空但有 availableSeats → 继续正常锁定流程
             }
 
-            // 3. 使用 Redis 分布式锁 + DB 乐观锁
-            List<String> lockKeys = seatIds.stream()
-                    .map(id -> "seat:lock:" + scheduleId + ":" + id)
-                    .collect(Collectors.toList());
-
+            // 3. 获取 Redis 互斥锁（只对需要 DB 更新的 availableSeats 加锁）
             List<RLock> acquiredLocks = new ArrayList<>();
             try {
-                // 尝试获取所有 Redis 锁
-                for (String lockKey : lockKeys) {
-                    RLock lock = redissonClient.getLock(lockKey);
-                    if (lock.tryLock(3, 15, TimeUnit.MINUTES)) {
+                for (Seat seat : availableSeats) {
+                    RLock lock = redissonClient.getLock(LOCK_KEY_PREFIX + scheduleId + ":" + seat.getId());
+                    if (lock.tryLock(3, LOCK_TTL_MINUTES, TimeUnit.MINUTES)) {
                         acquiredLocks.add(lock);
                     } else {
-                        // 释放已获取的锁
                         for (RLock acquired : acquiredLocks) {
                             try { acquired.unlock(); } catch (Exception ignored) {}
                         }
@@ -186,23 +201,27 @@ public class LockSeatsTool extends BaseTool {
                 }
 
                 // 4. DB 乐观锁：只更新 status='available' 的座位
+                int ownerTtlSeconds = (int) (LOCK_TTL_MINUTES * 60);
                 for (Seat seat : availableSeats) {
                     long updated = seatMapper.updateByQuery(
-                            Seat.builder().status("locked").build(),
+                            Seat.builder().status(SeatStatusEnum.LOCKED.getValue()).build(),
                             QueryWrapper.create()
                                     .eq(Seat::getId, seat.getId())
-                                    .eq(Seat::getStatus, "available")
+                                    .eq(Seat::getStatus, SeatStatusEnum.AVAILABLE.getValue())
                     );
                     if (updated == 0) {
-                        // 并发冲突
                         for (RLock acquired : acquiredLocks) {
                             try { acquired.unlock(); } catch (Exception ignored) {}
                         }
                         return "{\"success\":false,\"error\":\"手慢了！😅 座位 " + seat.getSeatLabel() + " 已被别人抢走\"}";
                     }
+                    // ★ 写入 owner 归属标记
+                    String owner = convId != null ? convId : "anon";
+                    redissonClient.getBucket(OWNER_KEY_PREFIX + scheduleId + ":" + seat.getId())
+                            .set(owner, ownerTtlSeconds, TimeUnit.SECONDS);
                 }
 
-                // 5. 锁定成功，根据排片计算实际价格
+                // 5. 锁定成功
                 List<String> lockedLabels = availableSeats.stream()
                         .map(Seat::getSeatLabel)
                         .collect(Collectors.toList());
@@ -224,8 +243,7 @@ public class LockSeatsTool extends BaseTool {
                 result.put("totalPrice", totalPrice);
                 result.put("message", "太棒了！🎉 已为您锁定 " + String.join("、", lockedLabels));
 
-                // ReAct 模式下将 lockedSeatIds 写回 ConversationState（Graph 模式由 LockSeatsNode 处理）
-                String convId = ConversationContext.get();
+                // 写回 ConversationState
                 if (convId != null) {
                     try {
                         List<Long> lockedIds = availableSeats.stream().map(Seat::getId).collect(Collectors.toList());
@@ -243,7 +261,6 @@ public class LockSeatsTool extends BaseTool {
                 return objectMapper.writeValueAsString(result);
 
             } catch (Exception e) {
-                // 异常时释放所有已获取的锁
                 for (RLock acquired : acquiredLocks) {
                     try { acquired.unlock(); } catch (Exception ignored) {}
                 }
@@ -261,34 +278,21 @@ public class LockSeatsTool extends BaseTool {
 
     /**
      * 查找可用座位作为替代推荐
-     * <p>
-     * ★ 修复"推荐很差"：原实现只取全厅 rowNum/colNum 升序前 10 个可用座位，
-     * 推荐出来的几乎都是最前排/最靠边的座位（如"1排1座、1排2座"），完全不贴近用户想坐的区域。
-     * <p>
-     * 新策略：
-     * ① 就近：优先推荐与冲突座位同排、且列号紧邻冲突列号的连续可用座位（用户原本想坐的区域）；
-     * ② 居中：跨排推荐时按"离中心排近 → 列号靠近影厅正中心"排序，不再推荐边角座；
-     * ③ 成块：同一排只返回一个连续可用块，保证前端"每排相邻两位配对成方案"能配出真正相邻的座位
-     *    （否则混入不连续座位会配出"5排4座+5排8座"这种奇怪方案）；
-     * ④ 覆盖：按用户想要的票数返回 3~5 个方案的量，让用户有得选。
      */
     private List<Map<String, Object>> findAlternatives(Long scheduleId, List<Map<String, Object>> unavailableSeats) {
         try {
-            // 拉取整厅可用座位（一个厅 80~200 座，全量内存计算足够快）
             List<Seat> allSeats = seatMapper.selectListByQuery(
                     QueryWrapper.create()
                             .eq(Seat::getScheduleId, scheduleId)
-                            .eq(Seat::getStatus, "available"));
+                            .eq(Seat::getStatus, SeatStatusEnum.AVAILABLE.getValue()));
             if (allSeats.isEmpty()) {
                 return Collections.emptyList();
             }
 
-            // 按行分组（TreeMap 保证行号有序）
             TreeMap<Integer, List<Seat>> byRow = allSeats.stream()
                     .filter(s -> s.getRowNum() != null)
                     .collect(Collectors.groupingBy(Seat::getRowNum, TreeMap::new, Collectors.toList()));
 
-            // 冲突锚点：解析"5排6座"拿用户原本想坐的行列（作为就近推荐的基准）
             int anchorRow = -1;
             int anchorCol = -1;
             if (unavailableSeats != null && !unavailableSeats.isEmpty()) {
@@ -303,7 +307,6 @@ public class LockSeatsTool extends BaseTool {
                 }
             }
 
-            // 影厅中心行 / 中心列
             int centerRow = (byRow.firstKey() + byRow.lastKey()) / 2;
             int maxCol = byRow.values().stream()
                     .flatMap(List::stream)
@@ -311,11 +314,8 @@ public class LockSeatsTool extends BaseTool {
                     .max().orElse(0);
             double midCol = maxCol / 2.0;
 
-            // 用户想要的票数（方案至少要能配出相邻的 2 张；单座冲突也按 2 张推荐，保证前端能配出方案）
             int needCount = Math.max(2, unavailableSeats == null ? 1 : unavailableSeats.size());
 
-            // 行排序：冲突同排优先 → 离冲突排近 → 离中心排近
-            // （anchorRow 在解析循环中被赋值，非 effectively-final，先提成 final 副本供 lambda 捕获）
             final int baseRow = anchorRow > 0 ? anchorRow : centerRow;
             List<Integer> rows = new ArrayList<>(byRow.keySet());
             rows.sort(Comparator
@@ -323,7 +323,7 @@ public class LockSeatsTool extends BaseTool {
                     .thenComparingInt(r -> Math.abs(r - centerRow)));
 
             List<Map<String, Object>> result = new ArrayList<>();
-            Map<String, Object> bestSingle = null;   // 全厅兜底：凑不出连座时的最佳单座
+            Map<String, Object> bestSingle = null;
             double bestSingleDist = Double.MAX_VALUE;
             final int MAX_ALTS = 12;
             for (int r : rows) {
@@ -336,19 +336,16 @@ public class LockSeatsTool extends BaseTool {
                 if (runs.isEmpty()) {
                     continue;
                 }
-                // 同排优先选"列中心最靠近锚点列"的块；跨排优先选"列中心最靠近影厅中心列"的块
                 double targetCol = (anchorRow == r && anchorCol > 0) ? anchorCol : midCol;
                 List<Seat> bestRun = null;
                 double bestDist = Double.MAX_VALUE;
                 for (List<Seat> run : runs) {
                     double runCenter = (run.get(0).getColNum() + run.get(run.size() - 1).getColNum()) / 2.0;
                     double dist = Math.abs(runCenter - targetCol);
-                    // 单座无法配成前端方案，仅作全厅兜底
                     if (run.size() == 1 && dist < bestSingleDist) {
                         bestSingleDist = dist;
                         bestSingle = toAltMap(run.get(0));
                     }
-                    // 只推荐 ≥2 座的连续块，保证前端能配出"相邻两位"方案
                     if (run.size() >= 2 && dist < bestDist - 1e-9) {
                         bestDist = dist;
                         bestRun = run;
@@ -357,13 +354,11 @@ public class LockSeatsTool extends BaseTool {
                 if (bestRun == null) {
                     continue;
                 }
-                // 块内取 needCount 张连续座位（优先取列中心最靠近目标列的子段；块不够长则整块都给）
                 List<Seat> take = bestWindow(bestRun, needCount, targetCol);
                 for (Seat s : take) {
                     result.add(toAltMap(s));
                 }
             }
-            // 全厅都凑不出连座时才退而推荐最佳单座，避免给空列表
             if (result.isEmpty() && bestSingle != null) {
                 result.add(bestSingle);
             }
@@ -374,7 +369,6 @@ public class LockSeatsTool extends BaseTool {
         }
     }
 
-    /** 同一行内，把按列号升序的可用座位切分成多个"列号连续"的可用块 */
     private List<List<Seat>> splitConsecutiveRuns(List<Seat> rowSeats) {
         List<List<Seat>> runs = new ArrayList<>();
         List<Seat> cur = new ArrayList<>();
@@ -394,7 +388,6 @@ public class LockSeatsTool extends BaseTool {
         return runs;
     }
 
-    /** 在连续块内取 need 张、列中心最靠近 targetCol 的子段（块不够长则整块返回） */
     private List<Seat> bestWindow(List<Seat> run, int need, double targetCol) {
         if (run.size() <= need) {
             return run;
@@ -414,7 +407,6 @@ public class LockSeatsTool extends BaseTool {
         return best != null ? best : run;
     }
 
-    /** 替代座位转前端可用的 map（seatId 用字符串，避免雪花 ID 超出 JS 精度） */
     private Map<String, Object> toAltMap(Seat s) {
         Map<String, Object> map = new HashMap<>();
         map.put("seatId", String.valueOf(s.getId()));
@@ -424,29 +416,32 @@ public class LockSeatsTool extends BaseTool {
     }
 
     /**
-     * 释放所有过期的座位锁（Redis 锁已过期但 DB 状态仍为 locked）
-     * 在会话重置时调用，避免脏数据影响后续订票
+     * 释放所有孤儿锁：owner key 已过期但 DB 状态仍为 locked 的座位 → 重置为 available。
+     * 使用乐观锁条件更新，避免覆盖并发操作。
      */
     public void releaseStaleLocks() {
         try {
             List<Seat> lockedSeats = seatMapper.selectListByQuery(
-                    QueryWrapper.create().eq(Seat::getStatus, "locked")
+                    QueryWrapper.create().eq(Seat::getStatus, SeatStatusEnum.LOCKED.getValue())
             );
             int released = 0;
             for (Seat seat : lockedSeats) {
-                // 根据 scheduleId 重建 lock key 比较困难，直接用 forceUnlock 试探
-                // 实际上 Redis 锁过期后 isLocked() 会返回 false
-                // 这里直接释放所有 locked 状态但无活跃 Redis 锁的座位
-                // 简单策略：把所有 locked 座位恢复为 available（开发/测试环境）
-                seatMapper.update(Seat.builder()
-                        .id(seat.getId()).status("available").build());
-                released++;
+                // ★ 用乐观锁条件更新：只有 status 仍是 locked 时才改回 available
+                // 防止覆盖并发中刚刚被售出（sold）的座位
+                int updated = seatMapper.updateByQuery(
+                        Seat.builder().status(SeatStatusEnum.AVAILABLE.getValue()).build(),
+                        QueryWrapper.create()
+                                .eq("id", seat.getId())
+                                .eq("status", SeatStatusEnum.LOCKED.getValue()));
+                if (updated > 0) {
+                    released++;
+                }
             }
             if (released > 0) {
-                log.info("释放过期座位锁: {} 个座位已恢复为 available", released);
+                log.info("释放孤儿座位锁: {} 个座位已恢复为 available", released);
             }
         } catch (Exception e) {
-            log.error("释放过期锁失败", e);
+            log.error("释放孤儿锁失败", e);
         }
     }
 

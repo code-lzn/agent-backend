@@ -2,6 +2,7 @@ package com.limou.agent.service.impl;
 
 import com.limou.agent.mapper.SeatMapper;
 import com.limou.agent.model.entity.Seat;
+import com.limou.agent.model.enums.SeatStatusEnum;
 import com.limou.agent.model.vo.SeatLockResult;
 import com.limou.agent.service.SeatLockService;
 import com.mybatisflex.core.query.QueryWrapper;
@@ -23,6 +24,9 @@ import java.util.stream.Collectors;
  * <p>
  * 相比 FOR UPDATE 行锁：行锁是阻塞等待，Redis 锁是快速失败（tryLock 3 秒拿不到即返回冲突）；
  * 乐观锁保证同一座位只有第一个把 status 从 available 改成 locked 的人成功。
+ * <p>
+ * 并发安全：lockOwner 参数用于标记锁的归属——同一 owner 重复锁同一座位时幂等放行，
+ * 不同 owner 尝试锁已 locked 座位时拒绝，防止 A 锁座后 B 绕过互斥锁（A 的 Redis 锁已释放但 DB 仍为 locked）。
  *
  * @author 李振南
  */
@@ -31,8 +35,9 @@ import java.util.stream.Collectors;
 public class SeatLockServiceImpl implements SeatLockService {
 
     private static final String LOCK_KEY_PREFIX = "seat:lock:";
+    private static final String OWNER_KEY_PREFIX = "seat:owner:";
     private static final long WAIT_SECONDS = 3;
-    /** Redis 锁只用于瞬时互斥（秒级），DB status 才是持久状态，避免残留锁阻塞后续请求 */
+    /** Redis 互斥锁只用于瞬时互斥（秒级），DB status + owner key 才是持久状态 */
     private static final long MUTEX_SECONDS = 5;
 
     @Autowired
@@ -42,7 +47,7 @@ public class SeatLockServiceImpl implements SeatLockService {
     private SeatMapper seatMapper;
 
     @Override
-    public SeatLockResult lockSeats(Long scheduleId, List<Long> seatIds, int leaseMinutes) {
+    public SeatLockResult lockSeats(Long scheduleId, List<Long> seatIds, int leaseMinutes, String lockOwner) {
         SeatLockResult result = new SeatLockResult();
         if (scheduleId == null || seatIds == null || seatIds.isEmpty()) {
             result.setSuccess(false);
@@ -64,7 +69,7 @@ public class SeatLockServiceImpl implements SeatLockService {
                 .sorted(Comparator.comparing(Seat::getId))
                 .collect(Collectors.toList());
 
-        // 3. 获取所有 Redis 锁（任一失败则释放已拿的并返回冲突）
+        // 3. 获取所有 Redis 互斥锁（任一失败则释放已拿的并返回冲突）
         List<RLock> acquiredLocks = new ArrayList<>();
         try {
             for (Seat seat : sorted) {
@@ -80,28 +85,43 @@ public class SeatLockServiceImpl implements SeatLockService {
                 }
             }
 
-            // 4. 乐观锁逐个更新：available → locked；已 locked 的跳过（幂等）
+            // 4. 逐座位处理：available → locked（乐观锁）；已 locked → 校验归属
             List<Seat> locked = new ArrayList<>();
             List<Long> conflictIds = new ArrayList<>();
             List<String> conflictLabels = new ArrayList<>();
+            int ownerTtlSeconds = Math.max(leaseMinutes, 1) * 60;
+
             for (Seat seat : sorted) {
-                if ("locked".equals(seat.getStatus())) {
-                    // 已锁定，跳过 DB 更新（Redis 锁已在上面获取）
-                    locked.add(seat);
+                if (SeatStatusEnum.LOCKED.getValue().equals(seat.getStatus())) {
+                    // ★ 座位已是 locked → 校验归属，防止 A 锁座后 B 绕过互斥锁抢占
+                    String ownerKey = OWNER_KEY_PREFIX + scheduleId + ":" + seat.getId();
+                    String existingOwner = (String) redissonClient.getBucket(ownerKey).get();
+                    if (lockOwner != null && lockOwner.equals(existingOwner)) {
+                        // 同一 owner → 幂等跳过（如 lockSeat → createOrder 连续调用）
+                        locked.add(seat);
+                    } else {
+                        // 不同 owner 或 owner 缺失（TTL 到期后被他人抢占的窗口期）→ 冲突
+                        conflictIds.add(seat.getId());
+                        conflictLabels.add(seat.getSeatLabel() + " 已被锁定");
+                    }
                     continue;
                 }
-                if (!"available".equals(seat.getStatus())) {
+                if (!SeatStatusEnum.AVAILABLE.getValue().equals(seat.getStatus())) {
                     conflictIds.add(seat.getId());
                     conflictLabels.add(seat.getSeatLabel() + " 已被占用");
                     continue;
                 }
+                // 乐观锁：只有 status=available 的才能改成 locked
                 int updated = seatMapper.updateByQuery(
-                        Seat.builder().status("locked").build(),
+                        Seat.builder().status(SeatStatusEnum.LOCKED.getValue()).build(),
                         QueryWrapper.create()
                                 .eq("id", seat.getId())
-                                .eq("status", "available"));
+                                .eq("status", SeatStatusEnum.AVAILABLE.getValue()));
                 if (updated > 0) {
-                    seat.setStatus("locked");
+                    seat.setStatus(SeatStatusEnum.LOCKED.getValue());
+                    // ★ 写入归属标记，TTL 与锁座租约对齐
+                    redissonClient.getBucket(OWNER_KEY_PREFIX + scheduleId + ":" + seat.getId())
+                            .set(lockOwner, ownerTtlSeconds, TimeUnit.SECONDS);
                     locked.add(seat);
                 } else {
                     conflictIds.add(seat.getId());
@@ -110,11 +130,12 @@ public class SeatLockServiceImpl implements SeatLockService {
             }
 
             if (!conflictIds.isEmpty()) {
-                // 回滚本次已锁定的座位（保持 DB 一致），并释放全部 Redis 锁
+                // 回滚本次已锁定的座位 + 清除归属标记
                 for (Seat seat : locked) {
                     seatMapper.updateByQuery(
-                            Seat.builder().status("available").build(),
-                            QueryWrapper.create().eq("id", seat.getId()).eq("status", "locked"));
+                            Seat.builder().status(SeatStatusEnum.AVAILABLE.getValue()).build(),
+                            QueryWrapper.create().eq("id", seat.getId()).eq("status", SeatStatusEnum.LOCKED.getValue()));
+                    redissonClient.getBucket(OWNER_KEY_PREFIX + scheduleId + ":" + seat.getId()).delete();
                 }
                 releaseLocks(acquiredLocks);
                 result.setSuccess(false);
@@ -125,7 +146,7 @@ public class SeatLockServiceImpl implements SeatLockService {
 
             result.setSuccess(true);
             result.setLockedSeats(locked);
-            // DB 已落盘，释放 Redis 锁（互斥任务完成，状态由 DB 字段持有）
+            // DB 已落盘，释放 Redis 互斥锁（归属由 owner key 持有，TTL 对齐租约）
             releaseLocks(acquiredLocks);
             return result;
         } catch (Exception e) {
@@ -158,10 +179,12 @@ public class SeatLockServiceImpl implements SeatLockService {
         for (Long seatId : seatIds) {
             // ★ 同时匹配 locked 和 sold：取消订单时座位是 locked，退款时座位已是 sold
             seatMapper.updateByQuery(
-                    Seat.builder().status("available").build(),
-                    QueryWrapper.create().eq("id", seatId).in("status", List.of("locked", "sold")));
+                    Seat.builder().status(SeatStatusEnum.AVAILABLE.getValue()).build(),
+                    QueryWrapper.create().eq("id", seatId).in("status", List.of(
+                            SeatStatusEnum.LOCKED.getValue(), SeatStatusEnum.SOLD.getValue())));
+            // ★ 清除归属标记
+            redissonClient.getBucket(OWNER_KEY_PREFIX + scheduleId + ":" + seatId).delete();
         }
-        // Redis 锁已在 lockSeats 成功后立即释放，此处无需再释放
     }
 
     private void releaseLocks(List<RLock> locks) {
