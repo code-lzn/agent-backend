@@ -24,17 +24,38 @@ public class UserWatchedFilmServiceImpl extends ServiceImpl<UserWatchedFilmMappe
 
     @Override
     public void markAsWatched(Long userId, Long filmId) {
-        QueryWrapper qw = QueryWrapper.create()
-                .eq("userId", userId)
-                .eq("filmId", filmId);
-        if (this.count(qw) > 0) {
+        UserWatchedFilm existing = this.mapper.selectAnyByUserIdAndFilmId(userId, filmId);
+        if (existing != null && (existing.getIsDelete() == null || !existing.getIsDelete())) {
             return;
+        }
+        if (existing != null) {
+            this.mapper.physicalDeleteById(existing.getId());
         }
         UserWatchedFilm entity = UserWatchedFilm.builder()
                 .userId(userId)
                 .filmId(filmId)
                 .build();
         this.save(entity);
+    }
+
+    @Override
+    public boolean toggleWatched(Long userId, Long filmId) {
+        UserWatchedFilm existing = this.mapper.selectAnyByUserIdAndFilmId(userId, filmId);
+        if (existing != null && (existing.getIsDelete() == null || !existing.getIsDelete())) {
+            // 已看过 → 取消看过（物理删除）
+            this.mapper.physicalDeleteById(existing.getId());
+            return false;
+        }
+        // 不存在 或 之前被逻辑删除 → 先清理，再标记
+        if (existing != null) {
+            this.mapper.physicalDeleteById(existing.getId());
+        }
+        UserWatchedFilm entity = UserWatchedFilm.builder()
+                .userId(userId)
+                .filmId(filmId)
+                .build();
+        this.save(entity);
+        return true;
     }
 
     @Override

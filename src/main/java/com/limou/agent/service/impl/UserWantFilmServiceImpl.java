@@ -24,13 +24,16 @@ public class UserWantFilmServiceImpl extends ServiceImpl<UserWantFilmMapper, Use
 
     @Override
     public boolean toggleWantToSee(Long userId, Long filmId) {
-        QueryWrapper qw = QueryWrapper.create()
-                .eq("userId", userId)
-                .eq("filmId", filmId);
-        UserWantFilm existing = this.getOne(qw);
-        if (existing != null) {
-            this.removeById(existing.getId());
+        // 查出任意状态的记录（包括逻辑已删除的），避免 UNIQUE 冲突
+        UserWantFilm existing = this.mapper.selectAnyByUserIdAndFilmId(userId, filmId);
+        if (existing != null && (existing.getIsDelete() == null || !existing.getIsDelete())) {
+            // 活跃记录 → 物理删除，彻底移除
+            this.mapper.physicalDeleteById(existing.getId());
             return false;
+        }
+        // 不存在 或 之前被逻辑删除 → 先清理旧记录，再新建
+        if (existing != null) {
+            this.mapper.physicalDeleteById(existing.getId());
         }
         UserWantFilm entity = UserWantFilm.builder()
                 .userId(userId)
