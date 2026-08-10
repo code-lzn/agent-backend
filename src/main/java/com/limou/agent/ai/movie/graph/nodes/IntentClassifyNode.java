@@ -111,8 +111,13 @@ public class IntentClassifyNode implements GraphNode<MovieGraphState> {
         return switch (intent) {
             // ──────── 层级4: 展示座位图 ────────
             case "get_seat_map" -> {
-                // ★ 缺场次 → 退回查场次或搜影片
+                // ★ 缺场次
                 if (state.getScheduleId() == null) {
+                    // ★ 用户明确委托（"帮我订"）且 filmId 存在 → 直接走 lock_seats，
+                    //    LockSeatsNode 内置 resolveScheduleId() 自动解析场次，无需降级到 search_schedule
+                    if (state.canAutoPickSeats(userMessage) && state.getFilmId() != null) {
+                        yield "lock_seats";
+                    }
                     if (state.getFilmId() != null) {
                         yield "search_schedule";  // 有影片 → 查场次
                     }
