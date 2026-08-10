@@ -1,5 +1,7 @@
 package com.limou.agent.controller;
 
+import com.limou.agent.annotation.AuthCheck;
+import com.limou.agent.constant.UserConstant;
 import com.limou.agent.common.BaseResponse;
 import com.limou.agent.common.ResultUtils;
 import com.limou.agent.exception.ErrorCode;
@@ -125,6 +127,7 @@ public class ScheduleController {
      * 保存排期（含自动初始化座位）。
      */
     @PostMapping("save")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Long> save(@RequestBody Schedule schedule) {
         ThrowUtils.throwIf(schedule == null, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(schedule.getFilmId() == null, ErrorCode.PARAMS_ERROR, "影片不能为空");
@@ -140,6 +143,7 @@ public class ScheduleController {
      * 批量创建排期。
      */
     @PostMapping("/batchSave")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Integer> batchSave(@RequestBody List<Schedule> scheduleList) {
         ThrowUtils.throwIf(CollUtil.isEmpty(scheduleList), ErrorCode.PARAMS_ERROR);
         int count = scheduleService.batchSaveWithSeats(scheduleList);
@@ -150,6 +154,7 @@ public class ScheduleController {
      * 排期冲突校验。
      */
     @PostMapping("/checkConflict")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> checkConflict(@RequestBody ConflictCheckRequest request) {
         ThrowUtils.throwIf(request == null, ErrorCode.PARAMS_ERROR);
         boolean hasConflict = scheduleService.checkConflict(request);
@@ -160,6 +165,7 @@ public class ScheduleController {
      * 根据主键删除。
      */
     @DeleteMapping("remove/{id}")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> remove(@PathVariable Long id) {
         return ResultUtils.success(scheduleService.removeById(id));
     }
@@ -168,6 +174,7 @@ public class ScheduleController {
      * 根据主键更新。
      */
     @PutMapping("update")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Boolean> update(@RequestBody Schedule schedule) {
         // 编辑同样禁止跨天场次：开场 + 片长 + 15 分钟散场超过午夜则拒绝
         scheduleService.validateEndTimeWithinDay(schedule);
@@ -180,6 +187,7 @@ public class ScheduleController {
      * 后台分页查询。
      */
     @PostMapping("page")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<Page<Schedule>> page(@RequestBody Page<Schedule> page) {
         return ResultUtils.success(scheduleService.page(page));
     }
@@ -196,6 +204,7 @@ public class ScheduleController {
      * 查询所有。
      */
     @GetMapping("listAll")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<List<Schedule>> listAll() {
         return ResultUtils.success(scheduleService.list());
     }

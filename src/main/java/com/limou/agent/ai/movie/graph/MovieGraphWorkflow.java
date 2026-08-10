@@ -102,9 +102,9 @@ public class MovieGraphWorkflow {
                 // ==================== 节点 ====================
                 .addNode("intent_classify", new IntentClassifyNode(graphIntentClassifier, movieStateManager))
                 .addNode("search_film",     new SearchFilmNode(searchFilmsTool, movieStateManager))
-                .addNode("search_cinema",   new SearchCinemaNode(searchCinemasTool, movieStateManager))
+                .addNode("search_cinema",   new SearchCinemaNode(searchCinemasTool, searchFilmsTool, movieStateManager))
                 .addNode("search_nearby",   new SearchNearbyNode(searchNearbyCinemasTool, movieStateManager))
-                .addNode("search_schedule", new SearchScheduleNode(searchSchedulesTool, movieStateManager))
+                .addNode("search_schedule", new SearchScheduleNode(searchSchedulesTool, searchCinemasTool, getSeatMapTool, movieStateManager))
                 .addNode("get_seat_map",    new GetSeatMapNode(getSeatMapTool))
                 .addNode("lock_seats",      new LockSeatsNode(lockSeatsTool, getSeatMapTool, searchSchedulesTool, movieStateManager))
                 .addNode("create_order",    new CreateOrderNode(createOrderTool, movieStateManager))

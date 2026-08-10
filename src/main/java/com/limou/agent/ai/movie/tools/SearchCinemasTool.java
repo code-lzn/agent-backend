@@ -18,6 +18,8 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
+import java.sql.Date;
+import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -52,21 +54,25 @@ public class SearchCinemasTool extends BaseTool {
     ) {
         try {
             List<Cinema> cinemas;
+            // 每家影院该影片的未来可选场次数（filmId 分支统计，用于优先推荐排片充足的影院）
+            Map<Long, Long> countByCinema;
             // 模糊纠错命中（SQL like 查空时的拼音/别名兜底）
             FuzzyMatch fuzzyHit = null;
 
             if (filmId != null) {
-                // 通过排片表查找有该影片的影院ID
+                // 通过排片表查找有该影片"未来可售"场次（showDate >= 今天）的影院ID
+                // ★ 只算今天及以后的场次，排除只排过过去场次的影院（避免推荐"曾排过但现已无排片"的影院）
                 QueryWrapper scheduleWrapper = QueryWrapper.create()
                         .select(Schedule::getCinemaId)
                         .eq(Schedule::getFilmId, filmId)
                         .eq(Schedule::getStatus, "published")
-                        .groupBy(Schedule::getCinemaId);
+                        .ge(Schedule::getShowDate, Date.valueOf(LocalDate.now()));
 
                 List<Schedule> schedules = scheduleMapper.selectListByQuery(scheduleWrapper);
-                Set<Long> cinemaIds = schedules.stream()
-                        .map(Schedule::getCinemaId)
-                        .collect(Collectors.toSet());
+                countByCinema = schedules.stream()
+                        .filter(s -> s.getCinemaId() != null)
+                        .collect(Collectors.groupingBy(Schedule::getCinemaId, Collectors.counting()));
+                Set<Long> cinemaIds = countByCinema.keySet();
 
                 if (cinemaIds.isEmpty()) {
                     return "{\"cinemas\":[],\"total\":0,\"message\":\"暂无影院排片该影片\"}";
@@ -98,6 +104,7 @@ public class SearchCinemasTool extends BaseTool {
                     }
                 }
             } else {
+                countByCinema = Collections.emptyMap();
                 QueryWrapper wrapper = QueryWrapper.create()
                         .eq(Cinema::getStatus, "published");
 
@@ -125,6 +132,10 @@ public class SearchCinemasTool extends BaseTool {
                 }
             }
 
+            // ★ 按该影片未来场次数降序排序，优先推荐排片充足的影院
+            cinemas.sort(Comparator.comparingLong(
+                    c -> -countByCinema.getOrDefault(c.getId(), 0L)));
+
             List<Map<String, Object>> cinemaList = cinemas.stream().map(c -> {
                 Map<String, Object> map = new HashMap<>();
                 map.put("cinemaId", c.getId());
@@ -135,6 +146,8 @@ public class SearchCinemasTool extends BaseTool {
                 map.put("businessHours", c.getBusinessHours());
                 map.put("tags", c.getTags());
                 map.put("basePrice", c.getBasePrice());
+                // 该影院该影片未来可选场次数（优先推荐排片充足的影院）
+                map.put("futureScheduleCount", countByCinema.getOrDefault(c.getId(), 0L));
                 return map;
             }).collect(Collectors.toList());
 
