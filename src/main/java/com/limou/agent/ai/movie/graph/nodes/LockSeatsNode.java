@@ -74,16 +74,25 @@ public class LockSeatsNode implements GraphNode<MovieGraphState> {
 
         List<Long> seatIds = convState.getSeatIds();
 
-        // ★ 用户指定了具体座位标签（如 "1排1座"），从座位图查找对应的 seatId
-        if ((seatIds == null || seatIds.isEmpty())
-                && convState.getSeatLabels() != null && !convState.getSeatLabels().isEmpty()) {
+        // ★ 用户指定了具体座位标签（如 "1排1座"），从座位图查找对应的 seatId。
+        //   注意：seatLabels 非空时【优先】用它解析并覆盖 seatIds —— 否则上一轮残留的 seatIds
+        //   （如之前锁过的 6排7/8）会顶掉用户本轮新指定的座位，导致"我选2排3/4却锁到6排7/8"
+        if (convState.getSeatLabels() != null && !convState.getSeatLabels().isEmpty()) {
             String seatMapJson = getSeatMapTool.getSeatMap(convState.getScheduleId());
             seatIds = resolveSeatLabels(seatMapJson, convState.getSeatLabels());
-            if (!seatIds.isEmpty()) {
-                convState.setSeatIds(seatIds);
-                log.info("LockSeats seatLabels→seatId: labels={}, ids={}",
-                        convState.getSeatLabels(), seatIds);
+            if (seatIds.isEmpty()) {
+                // 用户明确指定了座位但座位图里找不到（座位号不存在）→ 明确报错，绝不回落旧座位/自动选座
+                log.warn("LockSeats 用户指定座位未找到: labels={}, scheduleId={}",
+                        convState.getSeatLabels(), convState.getScheduleId());
+                state.setToolResult("{\"success\":false,\"conflictSeats\":[],\"message\":\"您指定的座位「"
+                        + String.join("、", convState.getSeatLabels())
+                        + "」不存在或已下架，请检查座位号或让我帮您推荐\"}");
+                state.setToolName(MovieIntent.LOCK_SEATS.getCode());
+                return state;
             }
+            convState.setSeatIds(seatIds);
+            log.info("LockSeats seatLabels→seatId: labels={}, ids={}",
+                    convState.getSeatLabels(), seatIds);
         }
 
         // ★ 自动选座：用户明确让 AI 选座（有选座偏好 或 消息里委托"帮我选/直接下单/就按你推荐的"）但未指定具体座位。

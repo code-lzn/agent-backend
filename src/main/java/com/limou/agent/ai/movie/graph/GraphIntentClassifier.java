@@ -16,8 +16,12 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Graph 意图分类器（优化版）
@@ -81,12 +85,12 @@ public class GraphIntentClassifier {
             ## 用户输入
             {input}
             """;
+//
+//    @Resource
+//    private DashScopeChatModel dashscopeChatModel;
 
     @Resource
-    private DashScopeChatModel dashscopeChatModel;
-
-//    @Resource
-//    private DeepSeekChatModel deepSeekChatModel;
+    private DeepSeekChatModel deepSeekChatModel;
 
     @Resource
     private ObjectMapper objectMapper;
@@ -106,7 +110,7 @@ public class GraphIntentClassifier {
 
     @PostConstruct
     public void init() {
-        this.chatClient = ChatClient.builder(dashscopeChatModel).build();
+        this.chatClient = ChatClient.builder(deepSeekChatModel).build();
     }
 
     /**
@@ -177,6 +181,11 @@ public class GraphIntentClassifier {
                 }
                 if (slotsMap.get("preferredSeatZone") != null)
                     slots.setPreferredSeatZone((String) slotsMap.get("preferredSeatZone"));
+                // ★ 用户指定具体座位（"2排3和4吧"→["2排3座","2排4座"]）：必须解析进槽位，
+                //   否则 LockSeatsNode 拿不到座位 → 降级展示座位图 → 用户以为锁座了、第二轮却自动选座换座位
+                if (slotsMap.get("seatLabels") != null) {
+                    slots.setSeatLabels(parseSeatLabels(slotsMap.get("seatLabels")));
+                }
             }
             // userId 从当前会话状态获取，不由 LLM 提取（安全：防止用户伪造）
             if (currentState != null && currentState.getUserId() != null) {
@@ -220,6 +229,69 @@ public class GraphIntentClassifier {
                     + (state.getOrderId() != null ? "o" + state.getOrderId() : "");
         }
         return convId + ":" + msg.hashCode() + ":" + stateKey;
+    }
+
+    /** 座位标签正则："2排3" / "2排3座" / "第2排第3个" → 取行号列号 */
+    private static final Pattern SEAT_LABEL_PATTERN =
+            Pattern.compile("第?\\s*(\\d+)\\s*排\\s*第?\\s*(\\d+)\\s*(?:座|个|号)?");
+
+    /**
+     * 解析 LLM 返回的 seatLabels 槽位，统一归一化为 "X排Y座" 格式。
+     * 容错处理：
+     * <ul>
+     *   <li>值为数组 ["2排3座","2排4座"] → 逐项归一化</li>
+     *   <li>值为逗号/顿号/加号/空格/和 分隔的字符串 "2排3和4" "8排7座+8排8座" → 拆开逐项归一化</li>
+     *   <li>缺"座"字："2排3" → "2排3座"（seatMap seatLabel 是 X排Y座，精确匹配缺字会失败）</li>
+     *   <li>「3和4」接上一行：纯数字项自动补行号 → "2排3和4" = ["2排3座","2排4座"]</li>
+     * </ul>
+     */
+    private List<String> parseSeatLabels(Object raw) {
+        List<String> labels = new ArrayList<>();
+        if (raw == null) {
+            return labels;
+        }
+        List<String> items = new ArrayList<>();
+        if (raw instanceof List<?> list) {
+            for (Object o : list) {
+                if (o != null) {
+                    items.add(o.toString());
+                }
+            }
+        } else {
+            items.add(raw.toString());
+        }
+
+        // 上一项解析出的行号，用于纯数字项（"2排3和4"中的"4"）补齐
+        String lastRow = null;
+        for (String item : items) {
+            // 先按常见分隔符拆开，避免一个槽位塞多个座位
+            String[] parts = item.split("[,，、+＋\\s]|和|以及|与");
+            for (String part : parts) {
+                String p = part.trim();
+                if (p.isEmpty()) {
+                    continue;
+                }
+                Matcher m = SEAT_LABEL_PATTERN.matcher(p);
+                if (m.find()) {
+                    String row = m.group(1);
+                    String col = m.group(2);
+                    String label = row + "排" + col + "座";
+                    if (!labels.contains(label)) {
+                        labels.add(label);
+                    }
+                    lastRow = row;
+                } else if (lastRow != null && p.matches("\\d+\\s*座?")) {
+                    // 纯数字（如 "2排3和4" 里的 "4"，或 "4座"）→ 沿用上一行行号
+                    String col = p.replaceAll("[座\\s]", "");
+                    String label = lastRow + "排" + col + "座";
+                    if (!labels.contains(label)) {
+                        labels.add(label);
+                    }
+                }
+                // 无法解析的片段直接忽略，不阻断其他座位
+            }
+        }
+        return labels;
     }
 
     private String cleanJson(String raw) {

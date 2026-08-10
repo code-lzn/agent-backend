@@ -251,13 +251,24 @@ public class MovieStateManager {
         if (newSlots.getHallName() != null) state.setHallName(newSlots.getHallName());
         if (newSlots.getTicketCount() != null) state.setTicketCount(newSlots.getTicketCount());
         if (newSlots.getOrderId() != null) state.setOrderId(newSlots.getOrderId());
-        if (newSlots.getPreferredSeatZone() != null) state.setPreferredSeatZone(newSlots.getPreferredSeatZone());
+        // ★ 用户表达选座偏好（"换个中间两个"）→ 旧的精确座位选择作废，
+        //   否则 LockSeatsNode 拿残留 seatLabels 锁回上一轮的旧座位，而不是按新偏好自动选
+        if (newSlots.getPreferredSeatZone() != null
+                && !newSlots.getPreferredSeatZone().equals(state.getPreferredSeatZone())) {
+            state.setPreferredSeatZone(newSlots.getPreferredSeatZone());
+            state.setSeatIds(null);
+            state.setSeatLabels(null);
+        } else if (newSlots.getPreferredSeatZone() != null) {
+            state.setPreferredSeatZone(newSlots.getPreferredSeatZone());
+        }
         if (newSlots.getUserId() != null) state.setUserId(newSlots.getUserId());
         if (newSlots.getSeatIds() != null && !newSlots.getSeatIds().isEmpty()) {
             state.setSeatIds(newSlots.getSeatIds());
         }
         if (newSlots.getSeatLabels() != null && !newSlots.getSeatLabels().isEmpty()) {
             state.setSeatLabels(newSlots.getSeatLabels());
+            // ★ 用户明确指定了精确座位 → 偏好区域不再适用（避免 canAutoPickSeats 因残留 zone 误判）
+            state.setPreferredSeatZone(null);
         }
 
         saveState(conversationId, state);

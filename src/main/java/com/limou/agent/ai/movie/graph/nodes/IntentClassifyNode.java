@@ -151,8 +151,12 @@ public class IntentClassifyNode implements GraphNode<MovieGraphState> {
                     }
                     yield "chat";
                 }
-                // 缺座位且不允许自动选座 → 展示座位图让用户手动选
+                // 缺座位、未指定具体座位、也不允许自动选座 → 展示座位图让用户手动选
+                // ★ 用户已给出具体座位标签（如"2排3和4"→ seatLabels 非空）时不降级，
+                //   直接走 LockSeatsNode 的 resolveSeatLabels 真正锁座（否则座位被丢弃，第二轮会换成自动选座的座位）
+                boolean hasSeatLabels = state.getSeatLabels() != null && !state.getSeatLabels().isEmpty();
                 if ((state.getSeatIds() == null || state.getSeatIds().isEmpty())
+                        && !hasSeatLabels
                         && !state.canAutoPickSeats(userMessage)) {
                     yield "get_seat_map";
                 }
