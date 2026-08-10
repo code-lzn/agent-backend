@@ -28,8 +28,10 @@ public class ChatSessionServiceImpl extends ServiceImpl<ChatSessionMapper, ChatS
         ChatSession session = getOne(wrapper);
         if (session != null) {
             log.info("复用已有会话: sessionId={}, userId={}", session.getId(), userId);
+            return session;
         }
-        return session;
+        // 新用户无会话 → 自动创建
+        return createNew(userId);
     }
 
     @Override

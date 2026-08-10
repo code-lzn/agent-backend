@@ -4,6 +4,7 @@ import com.limou.agent.mapper.ScheduleMapper;
 import com.limou.agent.mapper.SeatMapper;
 import com.limou.agent.model.entity.Schedule;
 import com.limou.agent.model.entity.Seat;
+import com.limou.agent.model.enums.SeatStatusEnum;
 import com.limou.agent.util.ScheduleTimeUtil;
 import com.mybatisflex.core.query.QueryWrapper;
 import jakarta.annotation.Resource;
@@ -82,7 +83,7 @@ public class ExpiredScheduleSeatCleanupTask {
                     long deleted = seatMapper.deleteByQuery(
                             QueryWrapper.create()
                                     .eq(Seat::getScheduleId, s.getId())
-                                    .ne(Seat::getStatus, "sold"));
+                                    .ne(Seat::getStatus, SeatStatusEnum.SOLD.getValue()));
 
                     if (deleted > 0) {
                         deletedTotal += deleted;

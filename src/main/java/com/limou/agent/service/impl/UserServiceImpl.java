@@ -100,10 +100,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
         LoginUserVO vo = BeanUtil.copyProperties(user, LoginUserVO.class);
-        // 密码为默认密码 12345678 时需要引导设置
-        vo.setNeedSetPassword(
-                encryptPassword("12345678").equals(user.getUserPassword())
-        );
+        // 密码为空时需要引导设置（邮箱/微信注册无默认密码）
+        vo.setNeedSetPassword(StrUtil.isBlank(user.getUserPassword()));
         return vo;
 
 
@@ -130,23 +128,24 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         if (user == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户不存在或密码错误");
         }
+        if (StrUtil.isBlank(user.getUserPassword())) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "该账号未设置密码，请使用邮箱验证码或微信登录");
+        }
         // PRD 3.3.5：冻结账号禁止登录
         checkUserFrozen(user);
         //4.记录用户的登录态
         request.getSession().setAttribute(UserConstant.USER_LOGIN_STATE, user);
-        //5.生成 JWT Token（前端通过 Authorization header 携带，避免跨端 Cookie 串号）
-        LoginUserVO vo = this.getLoginUserVO(user);
-        vo.setToken(JwtUtils.createToken(user.getId(), user.getUserRole()));
-        return vo;
+        //5.返回
+        return this.getLoginUserVO(user);
     }
 
     @Override
     public User getLoginUser(HttpServletRequest request) {
-        // 1. 先尝试从 JWT Token 注入的 request attribute 获取（JWT 优先，避免跨端 Cookie 串号）
-        User userObj = (User) request.getAttribute(UserConstant.USER_LOGIN_STATE);
-        // 2. JWT 中没有时，尝试从 Session 获取（Cookie 认证，向后兼容）
+        // 1. 先尝试从 Session 获取（Cookie 认证，向后兼容）
+        User userObj = (User) request.getSession().getAttribute(UserConstant.USER_LOGIN_STATE);
+        // 2. Session 中没有时，尝试从 JWT Token 注入的 request attribute 获取
         if (userObj == null || userObj.getId() == null) {
-            userObj = (User) request.getSession().getAttribute(UserConstant.USER_LOGIN_STATE);
+            userObj = (User) request.getAttribute(UserConstant.USER_LOGIN_STATE);
         }
         if (userObj == null || userObj.getId() == null) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
@@ -268,17 +267,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             user = new User();
             user.setUserAccount(email);                          // ★ userAccount = 邮箱
             user.setUserName(email.split("@")[0]);               // 默认昵称：@前面部分
-            user.setUserPassword(encryptPassword("12345678"));
+            user.setUserPassword("");                             // 无默认密码，用空串满足 NOT NULL 约束
             user.setUserRole(UserRoleEnum.USER.getValue());
             save(user);
         }
         // PRD 3.3.5：冻结账号禁止登录
         checkUserFrozen(user);
         request.getSession().setAttribute(UserConstant.USER_LOGIN_STATE, user);
-        // ★ 生成 JWT Token（前端通过 Authorization header 携带，避免跨端 Cookie 串号）
-        LoginUserVO vo = this.getLoginUserVO(user);
-        vo.setToken(JwtUtils.createToken(user.getId(), user.getUserRole()));
-        return vo;
+        return this.getLoginUserVO(user);
     }
     // ==================== resetPassword ====================
     @Override
@@ -368,7 +364,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             user = new User();
             user.setUserAccount(weixinAccount);
             user.setUserName("微信用户" + openid.substring(Math.max(0, openid.length() - 6)));
-            user.setUserPassword(encryptPassword("12345678"));
+            user.setUserPassword("");                             // 无默认密码，用空串满足 NOT NULL 约束
             user.setUserRole(UserRoleEnum.USER.getValue());
             save(user);
         }

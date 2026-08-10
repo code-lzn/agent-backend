@@ -15,6 +15,7 @@ import com.limou.agent.model.entity.Order;
 import com.limou.agent.model.entity.OrderSeat;
 import com.limou.agent.model.entity.Schedule;
 import com.limou.agent.model.entity.Seat;
+import com.limou.agent.model.enums.SeatStatusEnum;
 import com.mybatisflex.core.query.QueryWrapper;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -140,9 +141,9 @@ public class GetSeatMapTool extends BaseTool {
             }
 
             // 统计
-            long availableCount = seats.stream().filter(s -> "available".equals(s.getStatus())).count();
-            long lockedCount = seats.stream().filter(s -> "locked".equals(s.getStatus())).count();
-            long soldCount = seats.stream().filter(s -> "sold".equals(s.getStatus())).count();
+            long availableCount = seats.stream().filter(s -> SeatStatusEnum.AVAILABLE.getValue().equals(s.getStatus())).count();
+            long lockedCount = seats.stream().filter(s -> SeatStatusEnum.LOCKED.getValue().equals(s.getStatus())).count();
+            long soldCount = seats.stream().filter(s -> SeatStatusEnum.SOLD.getValue().equals(s.getStatus())).count();
 
             Map<String, Object> result = new HashMap<>();
             result.put("scheduleId", scheduleId);
@@ -199,7 +200,7 @@ public class GetSeatMapTool extends BaseTool {
      */
     private int cleanOrphanLocks(Long scheduleId, List<Seat> seats) {
         List<Seat> lockedSeats = seats.stream()
-                .filter(s -> "locked".equals(s.getStatus()))
+                .filter(s -> SeatStatusEnum.LOCKED.getValue().equals(s.getStatus()))
                 .collect(Collectors.toList());
         if (lockedSeats.isEmpty()) {
             return 0;
@@ -211,10 +212,14 @@ public class GetSeatMapTool extends BaseTool {
                         .eq("scheduleId", scheduleId)
                         .eq("status", "pending"));
         if (pendingOrders.isEmpty()) {
-            // 没有 pending 订单 → 所有 locked 座位都是孤儿锁，全部释放
+            // 没有 pending 订单 → 所有 locked 座位都是孤儿锁，用乐观锁条件释放
             for (Seat seat : lockedSeats) {
-                seat.setStatus("available");
-                seatMapper.update(Seat.builder().id(seat.getId()).status("available").build());
+                seat.setStatus(SeatStatusEnum.AVAILABLE.getValue());
+                seatMapper.updateByQuery(
+                        Seat.builder().status(SeatStatusEnum.AVAILABLE.getValue()).build(),
+                        QueryWrapper.create()
+                                .eq("id", seat.getId())
+                                .eq("status", SeatStatusEnum.LOCKED.getValue()));
             }
             return lockedSeats.size();
         }
@@ -227,13 +232,19 @@ public class GetSeatMapTool extends BaseTool {
                 .map(OrderSeat::getSeatId)
                 .collect(Collectors.toSet());
 
-        // 释放不在任何 pending 订单中的 locked 座位
+        // 释放不在任何 pending 订单中的 locked 座位（乐观锁条件更新）
         int released = 0;
         for (Seat seat : lockedSeats) {
             if (!validLockedSeatIds.contains(seat.getId())) {
-                seat.setStatus("available");
-                seatMapper.update(Seat.builder().id(seat.getId()).status("available").build());
-                released++;
+                seat.setStatus(SeatStatusEnum.AVAILABLE.getValue());
+                int updated = seatMapper.updateByQuery(
+                        Seat.builder().status(SeatStatusEnum.AVAILABLE.getValue()).build(),
+                        QueryWrapper.create()
+                                .eq("id", seat.getId())
+                                .eq("status", SeatStatusEnum.LOCKED.getValue()));
+                if (updated > 0) {
+                    released++;
+                }
             }
         }
         return released;
